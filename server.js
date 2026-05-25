@@ -1782,94 +1782,192 @@ app.post("/api/admin/products/bulk-import", auth, adminOnly, upload.single("file
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
       try {
-        // Parse Features (split by newline or comma)
-        const featuresText = getVal(row, ["Features (One per line)", "Features", "features"]) || "";
-        const features = typeof featuresText === 'string'
-          ? featuresText.split(/\n|,/).map(f => f.trim()).filter(f => f !== "")
-          : [String(featuresText)];
+        const hasVal = (keys) => getVal(row, keys) !== undefined;
 
-        // Parse Specifications (Key: Value per line)
-        const specsText = getVal(row, ["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"]) || "";
-        const specifications = {};
-        if (typeof specsText === 'string') {
-          specsText.split("\n").forEach(line => {
-            const [key, ...valParts] = line.split(":");
-            if (key && valParts.length > 0) {
-              specifications[key.trim()] = valParts.join(":").trim();
-            }
-          });
-        }
+        // Try to identify if the product already exists matching ID, SKU, or Name
+        const rowId = getVal(row, ["Product ID", "id", "ID"]);
+        const rowSku = getVal(row, ["SKU", "sku"]);
+        const rowName = getVal(row, ["Product Name", "Name", "name", "Title"]);
 
-        // Parse Additional Images (comma separated)
-        const additionalImagesText = getVal(row, ["Additional Images", "images", "Images"]) || "";
-        const images = typeof additionalImagesText === 'string'
-          ? additionalImagesText.split(",").map(img => img.trim()).filter(img => img !== "")
-          : (additionalImagesText ? [String(additionalImagesText)] : []);
-
-        // Auto-generate Slug if empty
-        let name = getVal(row, ["Product Name", "Name", "name", "Title"]);
-        let slug = getVal(row, ["Slug", "slug"]) || "";
-        if (!slug && name) {
-          slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-        }
-
-        const price = getVal(row, ["Price", "price", "Rate", "Cost"]);
-        const weightKg = Number(getVal(row, ["Weight Kg", "weightKg", "Weight (Kg)", "Weight", "weight"])) || 0;
-        const length = Number(getVal(row, ["Length cm", "length", "Length (cm)", "Length", "length"])) || 0;
-        const width = Number(getVal(row, ["Width cm", "width", "Width (cm)", "Width", "width"])) || 0;
-        const height = Number(getVal(row, ["Height cm", "height", "Height (cm)", "Height", "height"])) || 0;
-
-        const productData = {
-          id: Number(getVal(row, ["Product ID", "id", "ID"])) || undefined,
-          name: name,
-          sku: String(getVal(row, ["SKU", "sku"]) || "").trim(),
-          slug: slug,
-          brand: getVal(row, ["Brand", "brand"]) || "",
-          category: getVal(row, ["Category", "category"]) || "",
-          subcategory: getVal(row, ["Subcategory", "subcategory"]) || "",
-          price: price !== undefined ? Number(price) : undefined,
-          stock: Number(getVal(row, ["Stock", "stock", "Quantity", "Qty"]) || 0),
-          weightKg: weightKg,
-          dimensions: {
-            length: length,
-            width: width,
-            height: height
-          },
-          description: getVal(row, ["Description", "description", "Desc"]) || "",
-          image: getVal(row, ["Main Image URL", "Image", "image", "Thumbnail"]) || "",
-          images: images.map(url => ({ url, publicId: "" })),
-          catalogue: getVal(row, ["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"]) || "",
-          keywords: getVal(row, ["Keywords (comma separated)", "Keywords", "keywords", "Tags"]) || "",
-          hsnCode: getVal(row, ["HSN Code", "hsnCode", "HSN"]) || "",
-          features: features,
-          specifications: specifications,
-          isActive: true
-        };
-
-        if (!productData.name) {
-          errors.push(`Row ${i + 2}: Product Name is missing`);
-          continue;
-        }
-        if (productData.price === undefined || isNaN(productData.price)) {
-          errors.push(`Row ${i + 2}: Valid Price is required`);
-          continue;
-        }
-
-        // Check if product already exists (by ID or SKU)
         let existingProduct = null;
-        if (productData.id) {
-          existingProduct = await Product.findOne({ id: productData.id });
-        } else if (productData.sku) {
-          existingProduct = await Product.findOne({ sku: productData.sku });
+
+        if (rowId && !isNaN(Number(rowId))) {
+          existingProduct = await Product.findOne({ id: Number(rowId) });
+        }
+        if (!existingProduct && rowSku && String(rowSku).trim()) {
+          existingProduct = await Product.findOne({ sku: String(rowSku).trim() });
+        }
+        if (!existingProduct && rowName && String(rowName).trim()) {
+          existingProduct = await Product.findOne({ name: { $regex: new RegExp("^" + String(rowName).trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + "$", "i") } });
         }
 
         if (existingProduct) {
-          // Update existing product
-          Object.assign(existingProduct, productData);
+          // UPDATE MODE: Update only the provided fields in Excel row
+          if (hasVal(["Product Name", "Name", "name", "Title"])) {
+            existingProduct.name = String(rowName).trim();
+          }
+          if (hasVal(["SKU", "sku"])) {
+            existingProduct.sku = String(rowSku).trim();
+          }
+          
+          let slugVal = getVal(row, ["Slug", "slug"]);
+          if (slugVal !== undefined) {
+            existingProduct.slug = String(slugVal).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+          } else if (hasVal(["Product Name", "Name", "name", "Title"])) {
+            existingProduct.slug = String(rowName).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+          }
+
+          if (hasVal(["Brand", "brand"])) {
+            existingProduct.brand = String(getVal(row, ["Brand", "brand"]) || "").trim();
+          }
+          if (hasVal(["Category", "category"])) {
+            existingProduct.category = String(getVal(row, ["Category", "category"]) || "").trim();
+          }
+          if (hasVal(["Subcategory", "subcategory"])) {
+            existingProduct.subcategory = String(getVal(row, ["Subcategory", "subcategory"]) || "").trim();
+          }
+          if (hasVal(["Price", "price", "Rate", "Cost"])) {
+            const priceVal = Number(getVal(row, ["Price", "price", "Rate", "Cost"]));
+            if (!isNaN(priceVal)) existingProduct.price = priceVal;
+          }
+          if (hasVal(["Stock", "stock", "Quantity", "Qty"])) {
+            const stockVal = Number(getVal(row, ["Stock", "stock", "Quantity", "Qty"]));
+            if (!isNaN(stockVal)) existingProduct.stock = stockVal;
+          }
+          if (hasVal(["Weight Kg", "weightKg", "Weight (Kg)", "Weight", "weight"])) {
+            const weightVal = Number(getVal(row, ["Weight Kg", "weightKg", "Weight (Kg)", "Weight", "weight"]));
+            if (!isNaN(weightVal)) existingProduct.weightKg = weightVal;
+          }
+
+          const lenVal = getVal(row, ["Length cm", "length", "Length (cm)", "Length", "length"]);
+          const widVal = getVal(row, ["Width cm", "width", "Width (cm)", "Width", "width"]);
+          const heiVal = getVal(row, ["Height cm", "height", "Height (cm)", "Height", "height"]);
+          if (lenVal !== undefined || widVal !== undefined || heiVal !== undefined) {
+            const d = { ...(existingProduct.dimensions || { length: 0, width: 0, height: 0 }) };
+            if (lenVal !== undefined && !isNaN(Number(lenVal))) d.length = Number(lenVal);
+            if (widVal !== undefined && !isNaN(Number(widVal))) d.width = Number(widVal);
+            if (heiVal !== undefined && !isNaN(Number(heiVal))) d.height = Number(heiVal);
+            existingProduct.dimensions = d;
+          }
+
+          if (hasVal(["Description", "description", "Desc"])) {
+            existingProduct.description = String(getVal(row, ["Description", "description", "Desc"]) || "").trim();
+          }
+          if (hasVal(["Main Image URL", "Image", "image", "Thumbnail"])) {
+            existingProduct.image = String(getVal(row, ["Main Image URL", "Image", "image", "Thumbnail"]) || "").trim();
+          }
+          if (hasVal(["Additional Images", "images", "Images"])) {
+            const additionalImagesText = getVal(row, ["Additional Images", "images", "Images"]) || "";
+            const imagesArr = typeof additionalImagesText === 'string'
+              ? additionalImagesText.split(",").map(img => img.trim()).filter(img => img !== "")
+              : (additionalImagesText ? [String(additionalImagesText)] : []);
+            existingProduct.images = imagesArr.map(url => ({ url, publicId: "" }));
+          }
+          if (hasVal(["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"])) {
+            existingProduct.catalogue = String(getVal(row, ["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"]) || "").trim();
+          }
+          if (hasVal(["Keywords (comma separated)", "Keywords", "keywords", "Tags"])) {
+            existingProduct.keywords = String(getVal(row, ["Keywords (comma separated)", "Keywords", "keywords", "Tags"]) || "").trim();
+          }
+          if (hasVal(["HSN Code", "hsnCode", "HSN"])) {
+            existingProduct.hsnCode = String(getVal(row, ["HSN Code", "hsnCode", "HSN"]) || "").trim();
+          }
+          if (hasVal(["Features (One per line)", "Features", "features"])) {
+            const featuresText = getVal(row, ["Features (One per line)", "Features", "features"]) || "";
+            const featuresArr = typeof featuresText === 'string'
+              ? featuresText.split(/\n|,/).map(f => f.trim()).filter(f => f !== "")
+              : [String(featuresText)];
+            existingProduct.features = featuresArr;
+          }
+          if (hasVal(["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"])) {
+            const specsText = getVal(row, ["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"]) || "";
+            const specificationsObj = {};
+            if (typeof specsText === 'string') {
+              specsText.split("\n").forEach(line => {
+                const [key, ...valParts] = line.split(":");
+                if (key && valParts.length > 0) {
+                  specificationsObj[key.trim()] = valParts.join(":").trim();
+                }
+              });
+            }
+            existingProduct.specifications = specificationsObj;
+          }
+          if (hasVal(["Active", "isActive", "Status"])) {
+            const activeVal = String(getVal(row, ["Active", "isActive", "Status"]) || "").toLowerCase();
+            existingProduct.isActive = activeVal === "true" || activeVal === "yes" || activeVal === "active" || activeVal === "1";
+          }
+
           await existingProduct.save();
           importedProducts.push(existingProduct);
         } else {
-          // Create new product
+          // CREATE MODE: Require Product Name and Price
+          if (!rowName || !String(rowName).trim()) {
+            errors.push(`Row ${i + 2}: Product Name is required for creating a new product`);
+            continue;
+          }
+          const price = getVal(row, ["Price", "price", "Rate", "Cost"]);
+          if (price === undefined || isNaN(Number(price))) {
+            errors.push(`Row ${i + 2}: Valid Price is required for creating a new product`);
+            continue;
+          }
+
+          // Parse Features (split by newline or comma)
+          const featuresText = getVal(row, ["Features (One per line)", "Features", "features"]) || "";
+          const features = typeof featuresText === 'string'
+            ? featuresText.split(/\n|,/).map(f => f.trim()).filter(f => f !== "")
+            : [String(featuresText)];
+
+          // Parse Specifications (Key: Value per line)
+          const specsText = getVal(row, ["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"]) || "";
+          const specifications = {};
+          if (typeof specsText === 'string') {
+            specsText.split("\n").forEach(line => {
+              const [key, ...valParts] = line.split(":");
+              if (key && valParts.length > 0) {
+                specifications[key.trim()] = valParts.join(":").trim();
+              }
+            });
+          }
+
+          // Parse Additional Images (comma separated)
+          const additionalImagesText = getVal(row, ["Additional Images", "images", "Images"]) || "";
+          const images = typeof additionalImagesText === 'string'
+            ? additionalImagesText.split(",").map(img => img.trim()).filter(img => img !== "")
+            : (additionalImagesText ? [String(additionalImagesText)] : []);
+
+          let slug = getVal(row, ["Slug", "slug"]) || "";
+          if (!slug) {
+            slug = String(rowName).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+          }
+
+          const weightKg = Number(getVal(row, ["Weight Kg", "weightKg", "Weight (Kg)", "Weight", "weight"])) || 0;
+          const length = Number(getVal(row, ["Length cm", "length", "Length (cm)", "Length", "length"])) || 0;
+          const width = Number(getVal(row, ["Width cm", "width", "Width (cm)", "Width", "width"])) || 0;
+          const height = Number(getVal(row, ["Height cm", "height", "Height (cm)", "Height", "height"])) || 0;
+
+          const productData = {
+            id: Number(rowId) || undefined,
+            name: String(rowName).trim(),
+            sku: String(rowSku || "").trim(),
+            slug: slug,
+            brand: String(getVal(row, ["Brand", "brand"]) || "").trim(),
+            category: String(getVal(row, ["Category", "category"]) || "").trim(),
+            subcategory: String(getVal(row, ["Subcategory", "subcategory"]) || "").trim(),
+            price: Number(price),
+            stock: Number(getVal(row, ["Stock", "stock", "Quantity", "Qty"]) || 0),
+            weightKg: weightKg,
+            dimensions: { length, width, height },
+            description: String(getVal(row, ["Description", "description", "Desc"]) || "").trim(),
+            image: String(getVal(row, ["Main Image URL", "Image", "image", "Thumbnail"]) || "").trim(),
+            images: images.map(url => ({ url, publicId: "" })),
+            catalogue: String(getVal(row, ["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"]) || "").trim(),
+            keywords: String(getVal(row, ["Keywords (comma separated)", "Keywords", "keywords", "Tags"]) || "").trim(),
+            hsnCode: String(getVal(row, ["HSN Code", "hsnCode", "HSN"]) || "").trim(),
+            features: features,
+            specifications: specifications,
+            isActive: true
+          };
+
           const newProduct = new Product(productData);
           await newProduct.save();
           importedProducts.push(newProduct);
