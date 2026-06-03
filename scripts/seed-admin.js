@@ -20,7 +20,7 @@ const seedAdmin = async () => {
     };
 
     let admin = await Employee.findOne({ username: new RegExp(`^${adminUsername}$`, 'i') });
-    
+
     if (admin) {
       Object.assign(admin, adminData);
     } else {

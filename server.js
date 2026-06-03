@@ -821,6 +821,177 @@ app.post("/api/sms/order-alert", auth, employeeOrAdmin, async (req, res) => {
   }
 });
 
+// AI Image search route (Visual Bearing Scanner)
+app.post("/api/products/search-image", upload.single("image"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: "No image file provided" });
+  }
+
+  try {
+    const hasKey = !!process.env.GEMINI_API_KEY;
+    if (!hasKey) {
+      return res.status(500).json({ message: "Gemini AI is not configured" });
+    }
+
+    // 1. Convert file buffer to Gemini Part format
+    const imagePart = {
+      inlineData: {
+        data: req.file.buffer.toString("base64"),
+        mimeType: req.file.mimetype
+      }
+    };
+
+    // 2. Fetch active products for catalog context
+    const products = await Product.find({ isActive: true })
+      .select('name category price sku brand keywords description')
+      .lean();
+
+    // Limit catalog context to keep token count reasonable
+    const productContext = products.map(p =>
+      `- SKU: ${p.sku} | Name: ${p.name} | Category: ${p.category} | Brand: ${p.brand}`
+    ).join('\n');
+
+    // 3. Initialize Gemini
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    // Use gemini-2.5-flash which is perfect for multimodal/vision tasks
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+    const prompt = `You are an industrial engineering assistant specialized in bearings and oil seals.
+Analyze the provided image of a bearing or oil seal, and identify its type, approximate dimensions, and features.
+Then, compare it to our available catalog below and find the top 3 best matching products.
+
+AVAILABLE CATALOG:
+${productContext}
+
+Respond strictly in valid JSON format. Do not write markdown blocks or any conversational text around the JSON.
+Format the response exactly as follows:
+{
+  "detectedType": "Deep Groove Ball Bearing",
+  "reasoning": "The image shows a ball bearing with single-row deep groove design.",
+  "matches": [
+    {
+      "sku": "SKU_OF_MATCH_1",
+      "confidence": 95,
+      "reason": "Visual attributes match this SKU exactly."
+    },
+    {
+      "sku": "SKU_OF_MATCH_2",
+      "confidence": 75,
+      "reason": "Similar shape, but size might differ."
+    }
+  ]
+}`;
+
+    const result = await model.generateContent([prompt, imagePart]);
+    const response = await result.response;
+    const text = response.text();
+
+    console.log("[AI Vision Search Response]:", text);
+
+    // Clean JSON response (remove any markdown formatting if present)
+    let cleanedText = text.trim();
+    if (cleanedText.includes("```")) {
+      const match = cleanedText.match(/```(?:json)?([\s\S]*?)```/);
+      if (match) {
+        cleanedText = match[1].trim();
+      }
+    }
+    
+    try {
+      const jsonResponse = JSON.parse(cleanedText);
+      res.json(jsonResponse);
+    } catch (parseErr) {
+      console.error("Failed to parse Gemini response as JSON:", text);
+      res.status(500).json({ 
+        message: "Failed to parse AI response as JSON", 
+        rawText: text,
+        error: parseErr.message 
+      });
+    }
+  } catch (error) {
+    console.error("AI vision search failed:", error);
+    res.status(500).json({ message: "AI vision search failed", error: error.message });
+  }
+});
+
+
+// GET product autocomplete search suggestions
+app.get("/api/products/autocomplete", async (req, res) => {
+  try {
+    const query = req.query.q ? req.query.q.trim() : "";
+    if (!query) {
+      return res.json({ suggestions: [], products: [] });
+    }
+
+    const words = query.split(/\s+/).filter(Boolean);
+    const searchConditions = words.map(word => ({
+      $or: [
+        { name: { $regex: word, $options: "i" } },
+        { sku: { $regex: word, $options: "i" } },
+        { brand: { $regex: word, $options: "i" } },
+        { category: { $regex: word, $options: "i" } },
+        { subcategory: { $regex: word, $options: "i" } },
+        { keywords: { $regex: word, $options: "i" } }
+      ]
+    }));
+
+    const rawProducts = await Product.find({
+      isActive: { $ne: false },
+      $and: searchConditions
+    })
+    .select("id name sku brand category subcategory keywords image price")
+    .limit(20)
+    .lean();
+
+    const queryLower = query.toLowerCase();
+    const suggestionsSet = new Set();
+
+    rawProducts.forEach(p => {
+      if (p.category && p.category.toLowerCase().includes(queryLower)) {
+        suggestionsSet.add(p.category.trim());
+      }
+      if (p.brand && p.brand.toLowerCase().includes(queryLower)) {
+        suggestionsSet.add(p.brand.trim());
+      }
+      if (p.subcategory && p.subcategory.toLowerCase().includes(queryLower)) {
+        suggestionsSet.add(p.subcategory.trim());
+      }
+      if (p.sku && p.sku.toLowerCase().includes(queryLower)) {
+        suggestionsSet.add(p.sku.trim().toUpperCase());
+      }
+      if (p.keywords) {
+        const kwList = p.keywords.split(',').map(k => k.trim());
+        kwList.forEach(kw => {
+          if (kw.toLowerCase().includes(queryLower)) {
+            suggestionsSet.add(kw);
+          }
+        });
+      }
+      if (p.name && p.name.toLowerCase().includes(queryLower)) {
+        suggestionsSet.add(p.name.trim());
+      }
+    });
+
+    const suggestions = Array.from(suggestionsSet)
+      .filter(item => item.length >= query.length)
+      .slice(0, 6);
+
+    const products = rawProducts.slice(0, 4).map(p => ({
+      id: p.id,
+      name: p.name,
+      sku: p.sku,
+      brand: p.brand,
+      category: p.category,
+      image: p.image,
+      price: p.price
+    }));
+
+    res.json({ suggestions, products });
+  } catch (error) {
+    console.error("Autocomplete failed:", error);
+    res.status(500).json({ message: "Search suggestions failed" });
+  }
+});
 
 // GET all products (MongoDB)
 app.get("/api/products", async (req, res) => {
