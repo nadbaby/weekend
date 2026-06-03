@@ -940,8 +940,54 @@ app.get("/api/products/autocomplete", async (req, res) => {
       $and: searchConditions
     })
     .select("id name sku brand category subcategory keywords image price")
-    .limit(20)
+    .limit(150)
     .lean();
+
+    // Sort by relevance score
+    const getRelevanceScore = (p, q) => {
+      const qLower = q.toLowerCase();
+      let score = 0;
+      
+      const name = (p.name || "").toLowerCase();
+      const category = (p.category || "").toLowerCase();
+      const subcategory = (p.subcategory || "").toLowerCase();
+      const sku = (p.sku || "").toLowerCase();
+      const brand = (p.brand || "").toLowerCase();
+      
+      // Name matches (highest priority)
+      if (name === qLower) {
+        score += 1000;
+      } else if (name.startsWith(qLower)) {
+        score += 500;
+      } else if (name.includes(qLower)) {
+        score += 200;
+      }
+      
+      // Category & Subcategory matches
+      if (category === qLower || subcategory === qLower) {
+        score += 300;
+      } else if (category.includes(qLower) || subcategory.includes(qLower)) {
+        score += 150;
+      }
+      
+      // SKU matches
+      if (sku === qLower) {
+        score += 100;
+      } else if (sku.includes(qLower)) {
+        score += 50;
+      }
+      
+      // Brand matches
+      if (brand === qLower) {
+        score += 80;
+      } else if (brand.includes(qLower)) {
+        score += 30;
+      }
+
+      return score;
+    };
+
+    rawProducts.sort((a, b) => getRelevanceScore(b, query) - getRelevanceScore(a, query));
 
     const queryLower = query.toLowerCase();
     const suggestionsSet = new Set();
