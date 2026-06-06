@@ -631,8 +631,14 @@ const adminOnly = async (req, res, next) => {
   // 2. If Firebase, check DB
   if (req.user.firebase) {
     try {
-      const employee = await Employee.findOne({ firebaseUid: req.user.uid });
+      const query = { $or: [{ firebaseUid: req.user.uid }] };
+      if (req.user.email) query.$or.push({ email: req.user.email });
+      
+      const employee = await Employee.findOne(query);
       if (employee && employee.role?.toLowerCase() === "admin") {
+        if (!employee.firebaseUid) {
+          await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
+        }
         req.user.role = "admin";
         return next();
       }
@@ -640,6 +646,35 @@ const adminOnly = async (req, res, next) => {
   }
 
   return res.status(403).json({ message: "Admin only" });
+};
+
+// admin or manager middleware
+const adminOrManager = async (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+
+  const isAllowedRole = (r) => ["admin", "manager"].includes(r?.toLowerCase());
+
+  // 1. Check if role is in token (Legacy)
+  if (isAllowedRole(req.user.role)) return next();
+
+  // 2. If Firebase, check DB
+  if (req.user.firebase) {
+    try {
+      const query = { $or: [{ firebaseUid: req.user.uid }] };
+      if (req.user.email) query.$or.push({ email: req.user.email });
+
+      const employee = await Employee.findOne(query);
+      if (employee && isAllowedRole(employee.role)) {
+        if (!employee.firebaseUid) {
+          await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
+        }
+        req.user.role = employee.role.toLowerCase();
+        return next();
+      }
+    } catch (err) { }
+  }
+
+  return res.status(403).json({ message: "Admin or Manager access only" });
 };
 
 // employee or admin middleware
@@ -654,8 +689,14 @@ const employeeOrAdmin = async (req, res, next) => {
   // 2. Check Firebase in DB
   if (req.user.firebase) {
     try {
-      const employee = await Employee.findOne({ firebaseUid: req.user.uid });
+      const query = { $or: [{ firebaseUid: req.user.uid }] };
+      if (req.user.email) query.$or.push({ email: req.user.email });
+
+      const employee = await Employee.findOne(query);
       if (employee && isStaffRole(employee.role)) {
+        if (!employee.firebaseUid) {
+          await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
+        }
         req.user.role = employee.role.toLowerCase();
         return next();
       }
@@ -1608,7 +1649,7 @@ app.delete("/api/admin/employees/:id", auth, adminOnly, async (req, res) => {
 });
 
 // User Management (Admin Only)
-app.get("/api/admin/users", auth, adminOnly, async (req, res) => {
+app.get("/api/admin/users", auth, adminOrManager, async (req, res) => {
   try {
     const users = await User.find({});
     res.json(users);
@@ -1617,7 +1658,7 @@ app.get("/api/admin/users", auth, adminOnly, async (req, res) => {
   }
 });
 
-app.patch("/api/admin/users/:id/discount", auth, adminOnly, async (req, res) => {
+app.patch("/api/admin/users/:id/discount", auth, adminOrManager, async (req, res) => {
   try {
     const { id } = req.params;
     const { specialDiscount } = req.body;
@@ -1636,7 +1677,7 @@ app.patch("/api/admin/users/:id/discount", auth, adminOnly, async (req, res) => 
   }
 });
 
-app.patch("/api/admin/users/:id/gst", auth, adminOnly, async (req, res) => {
+app.patch("/api/admin/users/:id/gst", auth, adminOrManager, async (req, res) => {
   try {
     const { id } = req.params;
     const { gstNumber } = req.body;
@@ -1693,7 +1734,7 @@ app.post("/api/user/update-profile", auth, async (req, res) => {
     const { name, email, company, gstNumber, profilePic } = req.body;
 
     const user = await User.findOneAndUpdate(
-      { $or: [{ phone: req.user.username }, { username: req.user.username }] },
+      { $or: [{ firebaseUid: req.user.uid || req.user.username }, { phone: req.user.username }, { username: req.user.username }] },
       {
         $set: {
           name,
@@ -1724,10 +1765,53 @@ app.post("/api/user/update-profile", auth, async (req, res) => {
 // Quote Request Endpoint
 app.post("/api/request-quote", auth, async (req, res) => {
   try {
+    const { name, company, email, phone, items, message, product, quantity } = req.body;
+    const quoteId = `QT_${Date.now()}`;
+    const username = req.user.uid || req.user.username;
+
+    // Calculate total original amount if items are present
+    let totalOriginalAmount = 0;
+    let formattedItems = [];
+
+    if (items && Array.isArray(items)) {
+      formattedItems = items.map(item => {
+        const origPrice = Number(item.price) || 0;
+        const qty = Number(item.quantity) || 1;
+        totalOriginalAmount += origPrice * qty;
+        return {
+          productId: item.id || item.productId,
+          name: item.name,
+          image: item.image,
+          quantity: qty,
+          originalPrice: origPrice,
+          offeredPrice: origPrice, // Initial offer matches original
+          counterPrice: 0
+        };
+      });
+    }
+
     const quoteData = new Quote({
-      id: `QT_${Date.now()}`,
-      ...req.body,
+      id: quoteId,
+      name,
+      company,
+      email,
+      phone,
+      product: product || (formattedItems.length > 0 ? formattedItems[0].name : ""),
+      quantity: quantity || (formattedItems.length > 0 ? String(formattedItems[0].quantity) : "1"),
+      message,
+      userId: username,
+      items: formattedItems,
+      totalOriginalAmount,
+      totalOfferedAmount: totalOriginalAmount,
+      status: "Pending Review",
+      negotiationHistory: [{
+        sender: "customer",
+        senderName: name || username,
+        message: message || "Requested a B2B volume price quote.",
+        createdAt: new Date()
+      }],
       createdAt: new Date().toISOString(),
+      updatedAt: new Date()
     });
 
     await quoteData.save();
@@ -1757,10 +1841,287 @@ app.post("/api/request-quote", auth, async (req, res) => {
       }
     }
 
-    res.status(201).json({ success: true, message: "Quote request received" });
+    res.status(201).json({ success: true, message: "Quote request received", quoteId });
   } catch (error) {
     console.error("Quote Request Error:", error);
     res.status(500).json({ message: "Failed to process quote request" });
+  }
+});
+
+// GET My Quotes
+app.get("/api/quotes/my-quotes", auth, async (req, res) => {
+  try {
+    const username = req.user.uid || req.user.username;
+    const quotes = await Quote.find({ userId: username }).sort({ createdAt: -1 });
+    res.json(quotes);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch quotes" });
+  }
+});
+
+// GET Single Quote Detail
+app.get("/api/quotes/:id", auth, async (req, res) => {
+  try {
+    const quote = await Quote.findOne({ id: req.params.id });
+    if (!quote) return res.status(404).json({ message: "Quote not found" });
+
+    // Security check: Only the owner or employee/admin can view
+    const isOwner = quote.userId === (req.user.uid || req.user.username);
+    
+    let userRole = req.user.role;
+    if (req.user.firebase) {
+      try {
+        const query = { $or: [{ firebaseUid: req.user.uid }] };
+        if (req.user.email) query.$or.push({ email: req.user.email });
+        const employee = await Employee.findOne(query);
+        if (employee) {
+          userRole = employee.role;
+          if (!employee.firebaseUid) {
+            await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
+          }
+        }
+      } catch (err) {}
+    }
+    const isStaff = ["admin", "employee", "staff", "manager"].includes(userRole?.toLowerCase());
+
+    if (!isOwner && !isStaff) {
+      return res.status(403).json({ message: "Forbidden: Access denied" });
+    }
+
+    res.json(quote);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch quote details" });
+  }
+});
+
+// POST Customer Negotiation (Accept, Reject, Counter Offer)
+app.post("/api/quotes/:id/negotiate", auth, async (req, res) => {
+  try {
+    const { action, message, items } = req.body;
+    const quote = await Quote.findOne({ id: req.params.id });
+    if (!quote) return res.status(404).json({ message: "Quote not found" });
+
+    // Verify owner
+    if (quote.userId !== (req.user.uid || req.user.username)) {
+      return res.status(403).json({ message: "Forbidden: Only the quote owner can negotiate" });
+    }
+
+    if (action === "accept") {
+      quote.status = "Accepted";
+      quote.negotiationHistory.push({
+        sender: "customer",
+        senderName: req.user.name || req.user.email || req.user.username,
+        message: message || "Accepted the pricing offer.",
+        createdAt: new Date()
+      });
+    } else if (action === "reject") {
+      quote.status = "Rejected";
+      quote.negotiationHistory.push({
+        sender: "customer",
+        senderName: req.user.name || req.user.email || req.user.username,
+        message: message || "Rejected the pricing offer.",
+        createdAt: new Date()
+      });
+    } else if (action === "counter") {
+      quote.status = "Counter Offered";
+      
+      // Update item counter prices
+      if (items && Array.isArray(items)) {
+        let totalCounterAmount = 0;
+        quote.items = quote.items.map(dbItem => {
+          const matchingItem = items.find(i => String(i.productId) === String(dbItem.productId));
+          const counterPrice = matchingItem ? Number(matchingItem.counterPrice) : dbItem.offeredPrice;
+          dbItem.counterPrice = counterPrice;
+          totalCounterAmount += counterPrice * dbItem.quantity;
+          return dbItem;
+        });
+        quote.totalCounterAmount = totalCounterAmount;
+      }
+
+      quote.negotiationHistory.push({
+        sender: "customer",
+        senderName: req.user.name || req.user.email || req.user.username,
+        message: message || "Submitted counter-offer pricing.",
+        createdAt: new Date()
+      });
+    } else {
+      return res.status(400).json({ message: "Invalid action. Must be accept, reject, or counter" });
+    }
+
+    quote.updatedAt = new Date();
+    await quote.save();
+
+    res.json({ success: true, message: `Quote status updated to ${quote.status}`, quote });
+  } catch (error) {
+    console.error("Negotiation Error:", error);
+    res.status(500).json({ message: "Failed to process negotiation response" });
+  }
+});
+
+// POST Convert Accepted Quote to Payable Order
+app.post("/api/quotes/:id/convert-to-order", auth, async (req, res) => {
+  try {
+    const { shippingAddress } = req.body;
+    const quote = await Quote.findOne({ id: req.params.id });
+    if (!quote) return res.status(404).json({ message: "Quote not found" });
+
+    // Verify owner
+    if (quote.userId !== (req.user.uid || req.user.username)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    if (quote.status !== "Accepted") {
+      return res.status(400).json({ message: "Only accepted quotes can be converted to orders" });
+    }
+
+    const orderId = `ORD_${Date.now()}`;
+
+    // Convert items into order format using the agreed offeredPrice
+    let itemsPriceTotal = 0;
+    const orderItems = quote.items.map(item => {
+      const finalPrice = item.offeredPrice || item.originalPrice;
+      itemsPriceTotal += finalPrice * item.quantity;
+      return {
+        id: item.productId,
+        name: item.name,
+        image: item.image,
+        quantity: item.quantity,
+        price: finalPrice
+      };
+    });
+
+    const newOrder = new Order({
+      orderId,
+      userId: quote.userId,
+      items: orderItems,
+      shippingAddress: shippingAddress || {
+        name: quote.name,
+        phone: quote.phone,
+        email: quote.email,
+        address: "Address not provided, requested during quote",
+        city: "",
+        state: "",
+        zip: ""
+      },
+      paymentMethod: "ONLINE",
+      paymentDetails: {
+        status: "PENDING",
+        updatedAt: new Date()
+      },
+      status: "PENDING",
+      itemsPrice: itemsPriceTotal,
+      shippingPrice: 0, 
+      totalPrice: itemsPriceTotal,
+      createdAt: new Date().toISOString()
+    });
+
+    await newOrder.save();
+
+    quote.status = "Converted to Order";
+    quote.orderId = orderId;
+    quote.updatedAt = new Date();
+    await quote.save();
+
+    res.json({ success: true, message: "Quote successfully converted to order", orderId });
+  } catch (error) {
+    console.error("Convert Order Error:", error);
+    res.status(500).json({ message: "Failed to convert quote to order" });
+  }
+});
+
+// POST Init B2B Payment for Quote Order
+app.post("/api/quotes/:id/pay", auth, async (req, res) => {
+  try {
+    const quote = await Quote.findOne({ id: req.params.id });
+    if (!quote) return res.status(404).json({ message: "Quote not found" });
+
+    // Verify owner
+    if (quote.userId !== (req.user.uid || req.user.username)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    if (!quote.orderId) {
+      return res.status(400).json({ message: "Quote has not been converted to an order yet" });
+    }
+
+    const order = await Order.findOne({ orderId: quote.orderId });
+    if (!order) return res.status(404).json({ message: "Linked order not found" });
+
+    if (order.status === "PAID") {
+      return res.status(400).json({ message: "Order is already paid" });
+    }
+
+    // Create Razorpay Order if not already present or if we need a new one
+    if (!razorpay) return res.status(500).json({ message: "Razorpay is not configured" });
+
+    const options = {
+      amount: Math.round(order.totalPrice * 100),
+      currency: "INR",
+      receipt: `rcpt_${quote.id}_${Date.now()}`
+    };
+
+    const razorpayOrder = await razorpay.orders.create(options);
+    order.razorpayOrderId = razorpayOrder.id;
+    await order.save();
+
+    res.json({
+      success: true,
+      id: razorpayOrder.id,
+      amount: razorpayOrder.amount,
+      currency: razorpayOrder.currency,
+      razorpayKeyId: process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID,
+      localOrderId: order.orderId
+    });
+  } catch (error) {
+    console.error("B2B Payment Init Error:", error);
+    res.status(500).json({ message: "Failed to initialize payment" });
+  }
+});
+
+// GET All Quotes (Staff/Admin)
+app.get("/api/admin/quotes", auth, employeeOrAdmin, async (req, res) => {
+  try {
+    const quotes = await Quote.find({}).sort({ updatedAt: -1 });
+    res.json(quotes);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch quotes" });
+  }
+});
+
+// POST Admin Offer Price
+app.post("/api/admin/quotes/:id/offer", auth, employeeOrAdmin, async (req, res) => {
+  try {
+    const { items, message } = req.body;
+    const quote = await Quote.findOne({ id: req.params.id });
+    if (!quote) return res.status(404).json({ message: "Quote not found" });
+
+    if (items && Array.isArray(items)) {
+      let totalOfferedAmount = 0;
+      quote.items = quote.items.map(dbItem => {
+        const matchingItem = items.find(i => String(i.productId) === String(dbItem.productId));
+        const offeredPrice = matchingItem ? Number(matchingItem.offeredPrice) : dbItem.originalPrice;
+        dbItem.offeredPrice = offeredPrice;
+        totalOfferedAmount += offeredPrice * dbItem.quantity;
+        return dbItem;
+      });
+      quote.totalOfferedAmount = totalOfferedAmount;
+    }
+
+    quote.status = "Price Offered";
+    quote.negotiationHistory.push({
+      sender: "admin",
+      senderName: req.user.name || req.user.username || "Manager/Staff",
+      message: message || "Offered specialized B2B pricing details.",
+      createdAt: new Date()
+    });
+
+    quote.updatedAt = new Date();
+    await quote.save();
+
+    res.json({ success: true, message: "Price offer submitted successfully", quote });
+  } catch (error) {
+    console.error("Admin Offer Error:", error);
+    res.status(500).json({ message: "Failed to submit pricing offer" });
   }
 });
 
