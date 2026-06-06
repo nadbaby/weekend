@@ -2009,9 +2009,9 @@ app.post("/api/quotes/:id/convert-to-order", auth, async (req, res) => {
         updatedAt: new Date()
       },
       status: "PENDING",
-      itemsPrice: itemsPriceTotal,
-      shippingPrice: 0, 
-      totalPrice: itemsPriceTotal,
+      subtotal: itemsPriceTotal,
+      shippingCharge: 0, 
+      total: itemsPriceTotal,
       createdAt: new Date().toISOString()
     });
 
@@ -2054,8 +2054,17 @@ app.post("/api/quotes/:id/pay", auth, async (req, res) => {
     // Create Razorpay Order if not already present or if we need a new one
     if (!razorpay) return res.status(500).json({ message: "Razorpay is not configured" });
 
+    let amountVal = order.total || order.subtotal || 0;
+    if (amountVal <= 0 && order.items && order.items.length > 0) {
+      amountVal = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    }
+
+    if (amountVal <= 0) {
+      return res.status(400).json({ message: "Order total amount must be greater than zero to initialize payment." });
+    }
+
     const options = {
-      amount: Math.round(order.totalPrice * 100),
+      amount: Math.round(amountVal * 100),
       currency: "INR",
       receipt: `rcpt_${quote.id}_${Date.now()}`
     };
