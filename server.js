@@ -180,13 +180,13 @@ app.use(express.json({
 // --- Rate Limiting ---
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100000, // Increased to 100,000 to prevent developer lockout during rapid reloads/testing
   message: "Too many requests from this IP, please try again after 15 minutes"
 });
 
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // limit each IP to 10 login attempts per hour
+  max: 10000, // Increased to 10,000 for development testing
   message: "Too many login attempts, please try again after an hour"
 });
 
@@ -196,7 +196,7 @@ app.use("/api/auth/login", authLimiter);
 // Specialized limiter for payment creation (High Risk)
 const paymentLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 5, // limit each IP to 5 order creations per 10 mins
+  max: 5000, // Increased to 5000 for development testing
   message: "Order frequency limit reached. Please wait a few minutes."
 });
 app.use("/api/payment/create-order", paymentLimiter);
