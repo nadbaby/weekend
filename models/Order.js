@@ -50,6 +50,18 @@ const OrderSchema = new mongoose.Schema({
     gatewayResponse: mongoose.Schema.Types.Mixed,
     updatedAt: { type: Date, default: Date.now }
   },
+  deliveryMethod: { type: String, enum: ["STANDARD", "PORTER"], default: "STANDARD" },
+  porterDeliveryDetails: {
+    fullName: String,
+    phone: String,
+    fullAddress: String,
+    landmark: String,
+    preferredTime: String,
+    deliveryInstructions: String,
+    urgency: String, // Normal / Urgent / Machine Breakdown
+    bookManually: { type: Boolean, default: false },
+    porterStatus: { type: String, enum: ["Porter Booking Pending", "Assigned", "Picked Up", "Out for Delivery", "Delivered", "Cancelled"], default: "Porter Booking Pending" }
+  },
   status: { type: String, default: "PENDING" },
   trackingId: { type: String },
   trackingLink: { type: String },

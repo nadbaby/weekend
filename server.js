@@ -364,7 +364,7 @@ const razorpay = (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
   : null;
 
 // --- Secure Total Calculation Helper ---
-const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null, courierId = null, paymentMethod = "PREPAID") => {
+const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null, courierId = null, paymentMethod = "PREPAID", deliveryMethod = "STANDARD") => {
   const products = await Product.find({}).lean();
   const user = await User.findOne({
     $or: [
@@ -405,7 +405,20 @@ const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null, cou
   let shippingCharge = 0;
   let shippingDetails = null;
 
-  if (cartItems.length > 0 && reqBodyAddress) {
+  if (deliveryMethod === "PORTER") {
+    const totalWeight = itemsWithDetails.reduce((sum, item) => {
+      const product = products.find(p => String(p.id) === String(item.id));
+      return sum + ((product?.weightKg || 0) * item.quantity);
+    }, 0);
+    shippingCharge = 0;
+    shippingDetails = {
+      method: "PORTER",
+      zone: "LOCAL/LUDHIANA",
+      totalWeight: totalWeight,
+      roundWeight: Math.ceil(totalWeight),
+      message: "To be confirmed"
+    };
+  } else if (cartItems.length > 0 && reqBodyAddress) {
     try {
       // 1. Prepare items with dimensions for calculation
       const itemsForShipping = itemsWithDetails.map(item => {
@@ -1237,12 +1250,12 @@ app.post("/api/coupons/validate-gst", auth, async (req, res) => {
 // 1. Create Razorpay or COD Order
 app.post("/api/payment/create-order", auth, async (req, res) => {
   try {
-    const { items, shippingAddress, couponCode, paymentMethod = "PREPAID", courierId = null } = req.body;
+    const { items, shippingAddress, couponCode, paymentMethod = "PREPAID", courierId = null, deliveryMethod = "STANDARD", porterDeliveryDetails = null } = req.body;
     const userId = req.user.uid || req.user.username;
 
     if (!items || !items.length) return res.status(400).json({ message: "Cart is empty" });
 
-    let { finalTotal, itemsWithDetails, subtotal, discountAmount, gstAmount, shippingCharge, shippingDetails } = await calculateOrderTotal(items, userId, shippingAddress, courierId, paymentMethod);
+    let { finalTotal, itemsWithDetails, subtotal, discountAmount, gstAmount, shippingCharge, shippingDetails } = await calculateOrderTotal(items, userId, shippingAddress, courierId, paymentMethod, deliveryMethod);
 
     // Apply GST Coupon if provided
     let appliedCoupon = null;
@@ -1296,6 +1309,8 @@ app.post("/api/payment/create-order", auth, async (req, res) => {
       total: finalTotal,
       shippingAddress,
       paymentMethod: paymentMethod,
+      deliveryMethod: deliveryMethod,
+      porterDeliveryDetails: porterDeliveryDetails,
       status: paymentMethod === "COD" ? "PLACED" : "PENDING",
       paymentDetails: {
         status: paymentMethod === "COD" ? "SUCCESS" : "PENDING",
@@ -1541,11 +1556,14 @@ app.get("/api/admin/orders", auth, employeeOrAdmin, async (req, res) => {
 app.patch("/api/admin/orders/:orderId/status", auth, employeeOrAdmin, async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { status, trackingId, trackingLink } = req.body;
+    const { status, trackingId, trackingLink, porterStatus, bookManually } = req.body;
 
-    const updateData = { status };
+    const updateData = {};
+    if (status !== undefined) updateData.status = status;
     if (trackingId !== undefined) updateData.trackingId = trackingId;
     if (trackingLink !== undefined) updateData.trackingLink = trackingLink;
+    if (porterStatus !== undefined) updateData["porterDeliveryDetails.porterStatus"] = porterStatus;
+    if (bookManually !== undefined) updateData["porterDeliveryDetails.bookManually"] = bookManually;
 
     const order = await Order.findOneAndUpdate(
       { orderId },
