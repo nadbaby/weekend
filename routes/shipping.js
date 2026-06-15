@@ -10,34 +10,25 @@ const Product = require("../models/Product");
  */
 router.post("/calculate", async (req, res) => {
   try {
-    const { items, address, method = "PER_KG", courierId = null, paymentMethod = "PREPAID" } = req.body;
+    const { items, address, method = "PER_KG" } = req.body;
 
     if (!items || !address) {
       return res.status(400).json({ message: "Items and address are required" });
     }
 
-    // 1. Build items list with actual DB weights and dimensions
-    const itemsForShipping = [];
+    // 1. Calculate total weight from product data
     let totalWeight = 0;
     for (const item of items) {
       const product = await Product.findOne({ id: item.id });
-      const weight = product?.weightKg || 0.5;
+      const weight = product?.weightKg || 0.5; // Default 0.5kg if not specified
       totalWeight += weight * (item.quantity || 1);
-      
-      itemsForShipping.push({
-        id: item.id,
-        quantity: item.quantity || 1,
-        weightKg: weight,
-        dimensions: product?.dimensions,
-        category: product?.category
-      });
     }
 
     // 2. Detect Zone
     const zoneKey = await detectZone(address.city, address.state);
 
     // 3. Calculate Charges
-    const calculation = await calculateCharges(itemsForShipping, zoneKey, method, 0, courierId, paymentMethod);
+    const calculation = await calculateCharges(totalWeight, zoneKey, method);
 
     res.json({
       success: true,
@@ -53,24 +44,6 @@ router.post("/calculate", async (req, res) => {
   } catch (error) {
     console.error("Shipping Calculation Error:", error);
     res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-router.post("/preview", async (req, res) => {
-  try {
-    const { items, state, city, method = "PER_KG", invoiceValue = 0, courierId = null, paymentMethod = "PREPAID" } = req.body;
-    
-    if (!items || !items.length) {
-      return res.status(400).json({ message: "Items are required" });
-    }
-
-    const zoneKey = await detectZone(city, state);
-    const result = await calculateCharges(items, zoneKey, method, invoiceValue, courierId, paymentMethod);
-    
-    res.json(result);
-  } catch (error) {
-    console.error("Shipping Preview Error:", error);
-    res.status(500).json({ message: error.message });
   }
 });
 

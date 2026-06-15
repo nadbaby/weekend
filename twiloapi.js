@@ -72,19 +72,6 @@ const sendOtp = async (phone) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiry = now + (5 * 60 * 1000); // 5 minutes
 
-    // Graceful Demo Fallback when Twilio credentials are not set or are placeholders
-    const isPlaceholder = !accountSid || !authToken || accountSid.includes('xxx') || authToken.includes('xxx') || !twilioPhoneNumber || twilioPhoneNumber.includes('xxx');
-    if (isPlaceholder) {
-        otpStore.set(formattedPhone, { otp, expires: expiry, lastSent: now });
-        console.log(`[DEMO MODE OTP] Virtual OTP generated: ${otp} for ${formattedPhone}`);
-        return { 
-            success: true, 
-            demoMode: true, 
-            otp: otp,
-            messageId: "demo_" + Date.now()
-        };
-    }
-
     try {
         const message = await client.messages.create({
             body: `Your Fine Bearing OTP is: ${otp}\nValid for 5 minutes. Do not share this code.`,
@@ -99,15 +86,21 @@ const sendOtp = async (phone) => {
     } catch (error) {
         console.error('Twilio SMS Error:', error.code, error.message);
 
-        // Fall back to virtual OTP in dev/testing environment if Twilio API fails to ensure signup is never blocked
-        otpStore.set(formattedPhone, { otp, expires: expiry, lastSent: now });
-        console.log(`[FALLBACK DEMO OTP] Virtual OTP generated due to Twilio error: ${otp} for ${formattedPhone}`);
-        return { 
-            success: true, 
-            demoMode: true, 
-            otp: otp,
-            messageId: "demo_fallback_" + Date.now()
-        };
+        // Give user-friendly error for trial account restriction
+        if (error.code === 21608) {
+            throw new Error(
+                'This phone number is not verified with our SMS provider. ' +
+                'During the testing phase, only pre-registered numbers can receive OTPs. ' +
+                'Please contact support to get your number verified.'
+            );
+        }
+        if (error.code === 21211) {
+            throw new Error('Invalid phone number format. Please include country code (e.g. +91...)');
+        }
+        if (error.code === 21614) {
+            throw new Error('This number is not capable of receiving SMS messages.');
+        }
+        throw new Error('Failed to send OTP. Please try again or contact support.');
     }
 };
 

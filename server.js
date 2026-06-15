@@ -180,13 +180,13 @@ app.use(express.json({
 // --- Rate Limiting ---
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100000, // Increased to 100,000 to prevent developer lockout during rapid reloads/testing
+  max: 100, // limit each IP to 100 requests per windowMs
   message: "Too many requests from this IP, please try again after 15 minutes"
 });
 
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10000, // Increased to 10,000 for development testing
+  max: 10, // limit each IP to 10 login attempts per hour
   message: "Too many login attempts, please try again after an hour"
 });
 
@@ -196,7 +196,7 @@ app.use("/api/auth/login", authLimiter);
 // Specialized limiter for payment creation (High Risk)
 const paymentLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 5000, // Increased to 5000 for development testing
+  max: 5, // limit each IP to 5 order creations per 10 mins
   message: "Order frequency limit reached. Please wait a few minutes."
 });
 app.use("/api/payment/create-order", paymentLimiter);
@@ -364,7 +364,7 @@ const razorpay = (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
   : null;
 
 // --- Secure Total Calculation Helper ---
-const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null, courierId = null, paymentMethod = "PREPAID", deliveryMethod = "STANDARD") => {
+const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null) => {
   const products = await Product.find({}).lean();
   const user = await User.findOne({
     $or: [
@@ -390,7 +390,6 @@ const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null, cou
       price: product.price,
       name: product.name,
       image: product.image, // SYNC PICTURES
-      category: product.category,
       totalPrice: itemTotal
     };
   });
@@ -405,20 +404,7 @@ const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null, cou
   let shippingCharge = 0;
   let shippingDetails = null;
 
-  if (deliveryMethod === "PORTER") {
-    const totalWeight = itemsWithDetails.reduce((sum, item) => {
-      const product = products.find(p => String(p.id) === String(item.id));
-      return sum + ((product?.weightKg || 0) * item.quantity);
-    }, 0);
-    shippingCharge = 0;
-    shippingDetails = {
-      method: "PORTER",
-      zone: "LOCAL/LUDHIANA",
-      totalWeight: totalWeight,
-      roundWeight: Math.ceil(totalWeight),
-      message: "To be confirmed"
-    };
-  } else if (cartItems.length > 0 && reqBodyAddress) {
+  if (cartItems.length > 0 && reqBodyAddress) {
     try {
       // 1. Prepare items with dimensions for calculation
       const itemsForShipping = itemsWithDetails.map(item => {
@@ -426,25 +412,20 @@ const calculateOrderTotal = async (cartItems, userId, reqBodyAddress = null, cou
         return {
           ...item,
           weightKg: product?.weightKg,
-          dimensions: product?.dimensions,
-          category: product?.category
+          dimensions: product?.dimensions
         };
       });
 
       // 2. Detect zone and calculate full breakdown
       const zoneKey = await detectZone(reqBodyAddress.city, reqBodyAddress.state);
-      const shippingResult = await calculateCharges(itemsForShipping, zoneKey, "PER_KG", taxableAmount, courierId, paymentMethod);
+      const shippingResult = await calculateCharges(itemsForShipping, zoneKey, "PER_KG", taxableAmount);
 
       shippingCharge = shippingResult.finalTotal;
       shippingDetails = {
         method: shippingResult.method,
         zone: shippingResult.zoneName,
         weights: shippingResult.weights,
-        breakdown: shippingResult.breakdown,
-        courier: shippingResult.courier,
-        paymentMethod: shippingResult.paymentMethod,
-        isFreeShippingApplied: shippingResult.isFreeShippingApplied,
-        freeShippingReason: shippingResult.freeShippingReason
+        breakdown: shippingResult.breakdown
       };
     } catch (shippingErr) {
       console.error("Shipping calculation failed during order total check:", shippingErr);
@@ -599,14 +580,6 @@ app.post("/api/auth/sync", auth, async (req, res) => {
 
     // 3. If still not found, create a new customer
     if (!user) {
-      // Prevent duplicate phone number crashes
-      if (phone) {
-        const existingPhone = await User.findOne({ phone });
-        if (existingPhone) {
-          return res.status(400).json({ message: "An account with this phone number already exists. Please log in using Phone OTP, or use a different phone number." });
-        }
-      }
-
       user = new User({
         id: "u_" + Date.now(),
         firebaseUid: req.user.uid,
@@ -644,14 +617,8 @@ const adminOnly = async (req, res, next) => {
   // 2. If Firebase, check DB
   if (req.user.firebase) {
     try {
-      const query = { $or: [{ firebaseUid: req.user.uid }] };
-      if (req.user.email) query.$or.push({ email: req.user.email });
-      
-      const employee = await Employee.findOne(query);
+      const employee = await Employee.findOne({ firebaseUid: req.user.uid });
       if (employee && employee.role?.toLowerCase() === "admin") {
-        if (!employee.firebaseUid) {
-          await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
-        }
         req.user.role = "admin";
         return next();
       }
@@ -659,35 +626,6 @@ const adminOnly = async (req, res, next) => {
   }
 
   return res.status(403).json({ message: "Admin only" });
-};
-
-// admin or manager middleware
-const adminOrManager = async (req, res, next) => {
-  if (!req.user) return res.status(401).json({ message: "Unauthorized" });
-
-  const isAllowedRole = (r) => ["admin", "manager"].includes(r?.toLowerCase());
-
-  // 1. Check if role is in token (Legacy)
-  if (isAllowedRole(req.user.role)) return next();
-
-  // 2. If Firebase, check DB
-  if (req.user.firebase) {
-    try {
-      const query = { $or: [{ firebaseUid: req.user.uid }] };
-      if (req.user.email) query.$or.push({ email: req.user.email });
-
-      const employee = await Employee.findOne(query);
-      if (employee && isAllowedRole(employee.role)) {
-        if (!employee.firebaseUid) {
-          await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
-        }
-        req.user.role = employee.role.toLowerCase();
-        return next();
-      }
-    } catch (err) { }
-  }
-
-  return res.status(403).json({ message: "Admin or Manager access only" });
 };
 
 // employee or admin middleware
@@ -702,14 +640,8 @@ const employeeOrAdmin = async (req, res, next) => {
   // 2. Check Firebase in DB
   if (req.user.firebase) {
     try {
-      const query = { $or: [{ firebaseUid: req.user.uid }] };
-      if (req.user.email) query.$or.push({ email: req.user.email });
-
-      const employee = await Employee.findOne(query);
+      const employee = await Employee.findOne({ firebaseUid: req.user.uid });
       if (employee && isStaffRole(employee.role)) {
-        if (!employee.firebaseUid) {
-          await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
-        }
         req.user.role = employee.role.toLowerCase();
         return next();
       }
@@ -875,223 +807,6 @@ app.post("/api/sms/order-alert", auth, employeeOrAdmin, async (req, res) => {
   }
 });
 
-// AI Image search route (Visual Bearing Scanner)
-app.post("/api/products/search-image", upload.single("image"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ message: "No image file provided" });
-  }
-
-  try {
-    const hasKey = !!process.env.GEMINI_API_KEY;
-    if (!hasKey) {
-      return res.status(500).json({ message: "Gemini AI is not configured" });
-    }
-
-    // 1. Convert file buffer to Gemini Part format
-    const imagePart = {
-      inlineData: {
-        data: req.file.buffer.toString("base64"),
-        mimeType: req.file.mimetype
-      }
-    };
-
-    // 2. Fetch active products for catalog context
-    const products = await Product.find({ isActive: true })
-      .select('name category price sku brand keywords description')
-      .lean();
-
-    // Limit catalog context to keep token count reasonable
-    const productContext = products.map(p =>
-      `- SKU: ${p.sku} | Name: ${p.name} | Category: ${p.category} | Brand: ${p.brand}`
-    ).join('\n');
-
-    // 3. Initialize Gemini
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    // Use gemini-2.5-flash which is perfect for multimodal/vision tasks
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-    const prompt = `You are an industrial engineering assistant specialized in bearings and oil seals.
-Analyze the provided image of a bearing or oil seal, and identify its type, approximate dimensions, and features.
-Then, compare it to our available catalog below and find the top 3 best matching products.
-
-AVAILABLE CATALOG:
-${productContext}
-
-Respond strictly in valid JSON format. Do not write markdown blocks or any conversational text around the JSON.
-Format the response exactly as follows:
-{
-  "detectedType": "Deep Groove Ball Bearing",
-  "reasoning": "The image shows a ball bearing with single-row deep groove design.",
-  "matches": [
-    {
-      "sku": "SKU_OF_MATCH_1",
-      "confidence": 95,
-      "reason": "Visual attributes match this SKU exactly."
-    },
-    {
-      "sku": "SKU_OF_MATCH_2",
-      "confidence": 75,
-      "reason": "Similar shape, but size might differ."
-    }
-  ]
-}`;
-
-    const result = await model.generateContent([prompt, imagePart]);
-    const response = await result.response;
-    const text = response.text();
-
-    console.log("[AI Vision Search Response]:", text);
-
-    // Clean JSON response (remove any markdown formatting if present)
-    let cleanedText = text.trim();
-    if (cleanedText.includes("```")) {
-      const match = cleanedText.match(/```(?:json)?([\s\S]*?)```/);
-      if (match) {
-        cleanedText = match[1].trim();
-      }
-    }
-    
-    try {
-      const jsonResponse = JSON.parse(cleanedText);
-      res.json(jsonResponse);
-    } catch (parseErr) {
-      console.error("Failed to parse Gemini response as JSON:", text);
-      res.status(500).json({ 
-        message: "Failed to parse AI response as JSON", 
-        rawText: text,
-        error: parseErr.message 
-      });
-    }
-  } catch (error) {
-    console.error("AI vision search failed:", error);
-    res.status(500).json({ message: "AI vision search failed", error: error.message });
-  }
-});
-
-
-// GET product autocomplete search suggestions
-app.get("/api/products/autocomplete", async (req, res) => {
-  try {
-    const query = req.query.q ? req.query.q.trim() : "";
-    if (!query) {
-      return res.json({ suggestions: [], products: [] });
-    }
-
-    const words = query.split(/\s+/).filter(Boolean);
-    const searchConditions = words.map(word => ({
-      $or: [
-        { name: { $regex: word, $options: "i" } },
-        { sku: { $regex: word, $options: "i" } },
-        { brand: { $regex: word, $options: "i" } },
-        { category: { $regex: word, $options: "i" } },
-        { subcategory: { $regex: word, $options: "i" } },
-        { keywords: { $regex: word, $options: "i" } }
-      ]
-    }));
-
-    const rawProducts = await Product.find({
-      isActive: { $ne: false },
-      $and: searchConditions
-    })
-    .select("id name sku brand category subcategory keywords image price")
-    .limit(150)
-    .lean();
-
-    // Sort by relevance score
-    const getRelevanceScore = (p, q) => {
-      const qLower = q.toLowerCase();
-      let score = 0;
-      
-      const name = (p.name || "").toLowerCase();
-      const category = (p.category || "").toLowerCase();
-      const subcategory = (p.subcategory || "").toLowerCase();
-      const sku = (p.sku || "").toLowerCase();
-      const brand = (p.brand || "").toLowerCase();
-      
-      // Name matches (highest priority)
-      if (name === qLower) {
-        score += 1000;
-      } else if (name.startsWith(qLower)) {
-        score += 500;
-      } else if (name.includes(qLower)) {
-        score += 200;
-      }
-      
-      // Category & Subcategory matches
-      if (category === qLower || subcategory === qLower) {
-        score += 300;
-      } else if (category.includes(qLower) || subcategory.includes(qLower)) {
-        score += 150;
-      }
-      
-      // SKU matches
-      if (sku === qLower) {
-        score += 100;
-      } else if (sku.includes(qLower)) {
-        score += 50;
-      }
-      
-      // Brand matches
-      if (brand === qLower) {
-        score += 80;
-      } else if (brand.includes(qLower)) {
-        score += 30;
-      }
-
-      return score;
-    };
-
-    rawProducts.sort((a, b) => getRelevanceScore(b, query) - getRelevanceScore(a, query));
-
-    const queryLower = query.toLowerCase();
-    const suggestionsSet = new Set();
-
-    rawProducts.forEach(p => {
-      if (p.category && p.category.toLowerCase().includes(queryLower)) {
-        suggestionsSet.add(p.category.trim());
-      }
-      if (p.brand && p.brand.toLowerCase().includes(queryLower)) {
-        suggestionsSet.add(p.brand.trim());
-      }
-      if (p.subcategory && p.subcategory.toLowerCase().includes(queryLower)) {
-        suggestionsSet.add(p.subcategory.trim());
-      }
-      if (p.sku && p.sku.toLowerCase().includes(queryLower)) {
-        suggestionsSet.add(p.sku.trim().toUpperCase());
-      }
-      if (p.keywords) {
-        const kwList = p.keywords.split(',').map(k => k.trim());
-        kwList.forEach(kw => {
-          if (kw.toLowerCase().includes(queryLower)) {
-            suggestionsSet.add(kw);
-          }
-        });
-      }
-      if (p.name && p.name.toLowerCase().includes(queryLower)) {
-        suggestionsSet.add(p.name.trim());
-      }
-    });
-
-    const suggestions = Array.from(suggestionsSet)
-      .filter(item => item.length >= query.length)
-      .slice(0, 6);
-
-    const products = rawProducts.slice(0, 4).map(p => ({
-      id: p.id,
-      name: p.name,
-      sku: p.sku,
-      brand: p.brand,
-      category: p.category,
-      image: p.image,
-      price: p.price
-    }));
-
-    res.json({ suggestions, products });
-  } catch (error) {
-    console.error("Autocomplete failed:", error);
-    res.status(500).json({ message: "Search suggestions failed" });
-  }
-});
 
 // GET all products (MongoDB)
 app.get("/api/products", async (req, res) => {
@@ -1247,15 +962,16 @@ app.post("/api/coupons/validate-gst", auth, async (req, res) => {
   }
 });
 
-// 1. Create Razorpay or COD Order
+// 1. Create Razorpay Order
 app.post("/api/payment/create-order", auth, async (req, res) => {
   try {
-    const { items, shippingAddress, couponCode, paymentMethod = "PREPAID", courierId = null, deliveryMethod = "STANDARD", porterDeliveryDetails = null } = req.body;
+    const { items, shippingAddress, couponCode } = req.body;
     const userId = req.user.uid || req.user.username;
 
+    if (!razorpay) return res.status(500).json({ message: "Razorpay is not configured on the server" });
     if (!items || !items.length) return res.status(400).json({ message: "Cart is empty" });
 
-    let { finalTotal, itemsWithDetails, subtotal, discountAmount, gstAmount, shippingCharge, shippingDetails } = await calculateOrderTotal(items, userId, shippingAddress, courierId, paymentMethod, deliveryMethod);
+    let { finalTotal, itemsWithDetails, subtotal, discountAmount, gstAmount, shippingCharge, shippingDetails } = await calculateOrderTotal(items, userId, shippingAddress);
 
     // Apply GST Coupon if provided
     let appliedCoupon = null;
@@ -1278,27 +994,17 @@ app.post("/api/payment/create-order", auth, async (req, res) => {
       }
     }
 
-    let razorpayOrderId = null;
-    let rzpAmount = 0;
-    let rzpCurrency = "INR";
+    const options = {
+      amount: finalTotal * 100,
+      currency: "INR",
+      receipt: `rcpt_${Date.now()}`,
+    };
 
-    if (paymentMethod === "PREPAID") {
-      if (!razorpay) return res.status(500).json({ message: "Razorpay is not configured on the server" });
-      const options = {
-        amount: finalTotal * 100,
-        currency: "INR",
-        receipt: `rcpt_${Date.now()}`,
-      };
-
-      const razorpayOrder = await razorpay.orders.create(options);
-      razorpayOrderId = razorpayOrder.id;
-      rzpAmount = razorpayOrder.amount;
-      rzpCurrency = razorpayOrder.currency;
-    }
+    const razorpayOrder = await razorpay.orders.create(options);
 
     const newOrder = new Order({
       orderId: `ORD_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      razorpayOrderId: razorpayOrderId,
+      razorpayOrderId: razorpayOrder.id,
       userId: userId,
       items: itemsWithDetails,
       subtotal,
@@ -1308,14 +1014,7 @@ app.post("/api/payment/create-order", auth, async (req, res) => {
       shippingDetails,
       total: finalTotal,
       shippingAddress,
-      paymentMethod: paymentMethod,
-      deliveryMethod: deliveryMethod,
-      porterDeliveryDetails: porterDeliveryDetails,
-      status: paymentMethod === "COD" ? "PLACED" : "PENDING",
-      paymentDetails: {
-        status: paymentMethod === "COD" ? "SUCCESS" : "PENDING",
-        transactionId: paymentMethod === "COD" ? `COD_${Date.now()}` : undefined
-      },
+      status: "PENDING",
       couponCode: appliedCoupon,
       purchaseCount: appliedCoupon ? usageCount + 1 : undefined, // Usage count for this GST
       createdAt: new Date().toISOString(),
@@ -1354,13 +1053,11 @@ app.post("/api/payment/create-order", auth, async (req, res) => {
     }
 
     res.json({
-      id: razorpayOrderId,
-      amount: rzpAmount || finalTotal * 100,
-      currency: rzpCurrency,
+      id: razorpayOrder.id,
+      amount: razorpayOrder.amount,
+      currency: razorpayOrder.currency,
       localOrderId: newOrder.orderId,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
-      paymentMethod,
-      order: newOrder
+      razorpayKeyId: process.env.RAZORPAY_KEY_ID
     });
 
     logAudit("ORDER_CREATED", userId, { orderId: newOrder.orderId, total: finalTotal });
@@ -1556,14 +1253,11 @@ app.get("/api/admin/orders", auth, employeeOrAdmin, async (req, res) => {
 app.patch("/api/admin/orders/:orderId/status", auth, employeeOrAdmin, async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { status, trackingId, trackingLink, porterStatus, bookManually } = req.body;
+    const { status, trackingId, trackingLink } = req.body;
 
-    const updateData = {};
-    if (status !== undefined) updateData.status = status;
+    const updateData = { status };
     if (trackingId !== undefined) updateData.trackingId = trackingId;
     if (trackingLink !== undefined) updateData.trackingLink = trackingLink;
-    if (porterStatus !== undefined) updateData["porterDeliveryDetails.porterStatus"] = porterStatus;
-    if (bookManually !== undefined) updateData["porterDeliveryDetails.bookManually"] = bookManually;
 
     const order = await Order.findOneAndUpdate(
       { orderId },
@@ -1667,7 +1361,7 @@ app.delete("/api/admin/employees/:id", auth, adminOnly, async (req, res) => {
 });
 
 // User Management (Admin Only)
-app.get("/api/admin/users", auth, adminOrManager, async (req, res) => {
+app.get("/api/admin/users", auth, adminOnly, async (req, res) => {
   try {
     const users = await User.find({});
     res.json(users);
@@ -1676,7 +1370,7 @@ app.get("/api/admin/users", auth, adminOrManager, async (req, res) => {
   }
 });
 
-app.patch("/api/admin/users/:id/discount", auth, adminOrManager, async (req, res) => {
+app.patch("/api/admin/users/:id/discount", auth, adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
     const { specialDiscount } = req.body;
@@ -1695,7 +1389,7 @@ app.patch("/api/admin/users/:id/discount", auth, adminOrManager, async (req, res
   }
 });
 
-app.patch("/api/admin/users/:id/gst", auth, adminOrManager, async (req, res) => {
+app.patch("/api/admin/users/:id/gst", auth, adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
     const { gstNumber } = req.body;
@@ -1752,7 +1446,7 @@ app.post("/api/user/update-profile", auth, async (req, res) => {
     const { name, email, company, gstNumber, profilePic } = req.body;
 
     const user = await User.findOneAndUpdate(
-      { $or: [{ firebaseUid: req.user.uid || req.user.username }, { phone: req.user.username }, { username: req.user.username }] },
+      { $or: [{ phone: req.user.username }, { username: req.user.username }] },
       {
         $set: {
           name,
@@ -1783,53 +1477,10 @@ app.post("/api/user/update-profile", auth, async (req, res) => {
 // Quote Request Endpoint
 app.post("/api/request-quote", auth, async (req, res) => {
   try {
-    const { name, company, email, phone, items, message, product, quantity } = req.body;
-    const quoteId = `QT_${Date.now()}`;
-    const username = req.user.uid || req.user.username;
-
-    // Calculate total original amount if items are present
-    let totalOriginalAmount = 0;
-    let formattedItems = [];
-
-    if (items && Array.isArray(items)) {
-      formattedItems = items.map(item => {
-        const origPrice = Number(item.price) || 0;
-        const qty = Number(item.quantity) || 1;
-        totalOriginalAmount += origPrice * qty;
-        return {
-          productId: item.id || item.productId,
-          name: item.name,
-          image: item.image,
-          quantity: qty,
-          originalPrice: origPrice,
-          offeredPrice: origPrice, // Initial offer matches original
-          counterPrice: 0
-        };
-      });
-    }
-
     const quoteData = new Quote({
-      id: quoteId,
-      name,
-      company,
-      email,
-      phone,
-      product: product || (formattedItems.length > 0 ? formattedItems[0].name : ""),
-      quantity: quantity || (formattedItems.length > 0 ? String(formattedItems[0].quantity) : "1"),
-      message,
-      userId: username,
-      items: formattedItems,
-      totalOriginalAmount,
-      totalOfferedAmount: totalOriginalAmount,
-      status: "Pending Review",
-      negotiationHistory: [{
-        sender: "customer",
-        senderName: name || username,
-        message: message || "Requested a B2B volume price quote.",
-        createdAt: new Date()
-      }],
+      id: `QT_${Date.now()}`,
+      ...req.body,
       createdAt: new Date().toISOString(),
-      updatedAt: new Date()
     });
 
     await quoteData.save();
@@ -1859,296 +1510,10 @@ app.post("/api/request-quote", auth, async (req, res) => {
       }
     }
 
-    res.status(201).json({ success: true, message: "Quote request received", quoteId });
+    res.status(201).json({ success: true, message: "Quote request received" });
   } catch (error) {
     console.error("Quote Request Error:", error);
     res.status(500).json({ message: "Failed to process quote request" });
-  }
-});
-
-// GET My Quotes
-app.get("/api/quotes/my-quotes", auth, async (req, res) => {
-  try {
-    const username = req.user.uid || req.user.username;
-    const quotes = await Quote.find({ userId: username }).sort({ createdAt: -1 });
-    res.json(quotes);
-  } catch (error) {
-    res.status(500).json({ message: "Failed to fetch quotes" });
-  }
-});
-
-// GET Single Quote Detail
-app.get("/api/quotes/:id", auth, async (req, res) => {
-  try {
-    const quote = await Quote.findOne({ id: req.params.id });
-    if (!quote) return res.status(404).json({ message: "Quote not found" });
-
-    // Security check: Only the owner or employee/admin can view
-    const isOwner = quote.userId === (req.user.uid || req.user.username);
-    
-    let userRole = req.user.role;
-    if (req.user.firebase) {
-      try {
-        const query = { $or: [{ firebaseUid: req.user.uid }] };
-        if (req.user.email) query.$or.push({ email: req.user.email });
-        const employee = await Employee.findOne(query);
-        if (employee) {
-          userRole = employee.role;
-          if (!employee.firebaseUid) {
-            await Employee.updateOne({ id: employee.id }, { firebaseUid: req.user.uid });
-          }
-        }
-      } catch (err) {}
-    }
-    const isStaff = ["admin", "employee", "staff", "manager"].includes(userRole?.toLowerCase());
-
-    if (!isOwner && !isStaff) {
-      return res.status(403).json({ message: "Forbidden: Access denied" });
-    }
-
-    res.json(quote);
-  } catch (error) {
-    res.status(500).json({ message: "Failed to fetch quote details" });
-  }
-});
-
-// POST Customer Negotiation (Accept, Reject, Counter Offer)
-app.post("/api/quotes/:id/negotiate", auth, async (req, res) => {
-  try {
-    const { action, message, items } = req.body;
-    const quote = await Quote.findOne({ id: req.params.id });
-    if (!quote) return res.status(404).json({ message: "Quote not found" });
-
-    // Verify owner
-    if (quote.userId !== (req.user.uid || req.user.username)) {
-      return res.status(403).json({ message: "Forbidden: Only the quote owner can negotiate" });
-    }
-
-    if (action === "accept") {
-      quote.status = "Accepted";
-      quote.negotiationHistory.push({
-        sender: "customer",
-        senderName: req.user.name || req.user.email || req.user.username,
-        message: message || "Accepted the pricing offer.",
-        createdAt: new Date()
-      });
-    } else if (action === "reject") {
-      quote.status = "Rejected";
-      quote.negotiationHistory.push({
-        sender: "customer",
-        senderName: req.user.name || req.user.email || req.user.username,
-        message: message || "Rejected the pricing offer.",
-        createdAt: new Date()
-      });
-    } else if (action === "counter") {
-      quote.status = "Counter Offered";
-      
-      // Update item counter prices
-      if (items && Array.isArray(items)) {
-        let totalCounterAmount = 0;
-        quote.items = quote.items.map(dbItem => {
-          const matchingItem = items.find(i => String(i.productId) === String(dbItem.productId));
-          const counterPrice = matchingItem ? Number(matchingItem.counterPrice) : dbItem.offeredPrice;
-          dbItem.counterPrice = counterPrice;
-          totalCounterAmount += counterPrice * dbItem.quantity;
-          return dbItem;
-        });
-        quote.totalCounterAmount = totalCounterAmount;
-      }
-
-      quote.negotiationHistory.push({
-        sender: "customer",
-        senderName: req.user.name || req.user.email || req.user.username,
-        message: message || "Submitted counter-offer pricing.",
-        createdAt: new Date()
-      });
-    } else {
-      return res.status(400).json({ message: "Invalid action. Must be accept, reject, or counter" });
-    }
-
-    quote.updatedAt = new Date();
-    await quote.save();
-
-    res.json({ success: true, message: `Quote status updated to ${quote.status}`, quote });
-  } catch (error) {
-    console.error("Negotiation Error:", error);
-    res.status(500).json({ message: "Failed to process negotiation response" });
-  }
-});
-
-// POST Convert Accepted Quote to Payable Order
-app.post("/api/quotes/:id/convert-to-order", auth, async (req, res) => {
-  try {
-    const { shippingAddress } = req.body;
-    const quote = await Quote.findOne({ id: req.params.id });
-    if (!quote) return res.status(404).json({ message: "Quote not found" });
-
-    // Verify owner
-    if (quote.userId !== (req.user.uid || req.user.username)) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    if (quote.status !== "Accepted") {
-      return res.status(400).json({ message: "Only accepted quotes can be converted to orders" });
-    }
-
-    const orderId = `ORD_${Date.now()}`;
-
-    // Convert items into order format using the agreed offeredPrice
-    let itemsPriceTotal = 0;
-    const orderItems = quote.items.map(item => {
-      const finalPrice = item.offeredPrice || item.originalPrice;
-      itemsPriceTotal += finalPrice * item.quantity;
-      return {
-        id: item.productId,
-        name: item.name,
-        image: item.image,
-        quantity: item.quantity,
-        price: finalPrice
-      };
-    });
-
-    const newOrder = new Order({
-      orderId,
-      userId: quote.userId,
-      items: orderItems,
-      shippingAddress: shippingAddress || {
-        name: quote.name,
-        phone: quote.phone,
-        email: quote.email,
-        address: "Address not provided, requested during quote",
-        city: "",
-        state: "",
-        zip: ""
-      },
-      paymentMethod: "ONLINE",
-      paymentDetails: {
-        status: "PENDING",
-        updatedAt: new Date()
-      },
-      status: "PENDING",
-      subtotal: itemsPriceTotal,
-      shippingCharge: 0, 
-      total: itemsPriceTotal,
-      createdAt: new Date().toISOString()
-    });
-
-    await newOrder.save();
-
-    quote.status = "Converted to Order";
-    quote.orderId = orderId;
-    quote.updatedAt = new Date();
-    await quote.save();
-
-    res.json({ success: true, message: "Quote successfully converted to order", orderId });
-  } catch (error) {
-    console.error("Convert Order Error:", error);
-    res.status(500).json({ message: "Failed to convert quote to order" });
-  }
-});
-
-// POST Init B2B Payment for Quote Order
-app.post("/api/quotes/:id/pay", auth, async (req, res) => {
-  try {
-    const quote = await Quote.findOne({ id: req.params.id });
-    if (!quote) return res.status(404).json({ message: "Quote not found" });
-
-    // Verify owner
-    if (quote.userId !== (req.user.uid || req.user.username)) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    if (!quote.orderId) {
-      return res.status(400).json({ message: "Quote has not been converted to an order yet" });
-    }
-
-    const order = await Order.findOne({ orderId: quote.orderId });
-    if (!order) return res.status(404).json({ message: "Linked order not found" });
-
-    if (order.status === "PAID") {
-      return res.status(400).json({ message: "Order is already paid" });
-    }
-
-    // Create Razorpay Order if not already present or if we need a new one
-    if (!razorpay) return res.status(500).json({ message: "Razorpay is not configured" });
-
-    let amountVal = order.total || order.subtotal || 0;
-    if (amountVal <= 0 && order.items && order.items.length > 0) {
-      amountVal = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    }
-
-    if (amountVal <= 0) {
-      return res.status(400).json({ message: "Order total amount must be greater than zero to initialize payment." });
-    }
-
-    const options = {
-      amount: Math.round(amountVal * 100),
-      currency: "INR",
-      receipt: `rcpt_${quote.id}_${Date.now()}`
-    };
-
-    const razorpayOrder = await razorpay.orders.create(options);
-    order.razorpayOrderId = razorpayOrder.id;
-    await order.save();
-
-    res.json({
-      success: true,
-      id: razorpayOrder.id,
-      amount: razorpayOrder.amount,
-      currency: razorpayOrder.currency,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID,
-      localOrderId: order.orderId
-    });
-  } catch (error) {
-    console.error("B2B Payment Init Error:", error);
-    res.status(500).json({ message: "Failed to initialize payment" });
-  }
-});
-
-// GET All Quotes (Staff/Admin)
-app.get("/api/admin/quotes", auth, employeeOrAdmin, async (req, res) => {
-  try {
-    const quotes = await Quote.find({}).sort({ updatedAt: -1 });
-    res.json(quotes);
-  } catch (error) {
-    res.status(500).json({ message: "Failed to fetch quotes" });
-  }
-});
-
-// POST Admin Offer Price
-app.post("/api/admin/quotes/:id/offer", auth, employeeOrAdmin, async (req, res) => {
-  try {
-    const { items, message } = req.body;
-    const quote = await Quote.findOne({ id: req.params.id });
-    if (!quote) return res.status(404).json({ message: "Quote not found" });
-
-    if (items && Array.isArray(items)) {
-      let totalOfferedAmount = 0;
-      quote.items = quote.items.map(dbItem => {
-        const matchingItem = items.find(i => String(i.productId) === String(dbItem.productId));
-        const offeredPrice = matchingItem ? Number(matchingItem.offeredPrice) : dbItem.originalPrice;
-        dbItem.offeredPrice = offeredPrice;
-        totalOfferedAmount += offeredPrice * dbItem.quantity;
-        return dbItem;
-      });
-      quote.totalOfferedAmount = totalOfferedAmount;
-    }
-
-    quote.status = "Price Offered";
-    quote.negotiationHistory.push({
-      sender: "admin",
-      senderName: req.user.name || req.user.username || "Manager/Staff",
-      message: message || "Offered specialized B2B pricing details.",
-      createdAt: new Date()
-    });
-
-    quote.updatedAt = new Date();
-    await quote.save();
-
-    res.json({ success: true, message: "Price offer submitted successfully", quote });
-  } catch (error) {
-    console.error("Admin Offer Error:", error);
-    res.status(500).json({ message: "Failed to submit pricing offer" });
   }
 });
 
@@ -2187,40 +1552,11 @@ app.put("/api/admin/shipping-config", auth, authorize(['admin']), async (req, re
   }
 });
 
-app.get("/api/shipping/couriers", async (req, res) => {
-  try {
-    const config = await ShippingConfig.findOne() || await initializeDefaultConfig();
-    const activeCouriers = config.couriers.filter(c => c.isActive).map(c => ({
-      id: c.id,
-      name: c.name,
-      type: c.type,
-      baseRateAdjustment: c.baseRateAdjustment,
-      rateMultiplier: c.rateMultiplier
-    }));
-    res.json(activeCouriers);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
 app.post("/api/calculate-shipping", async (req, res) => {
   try {
-    const { items, city, state, method, invoiceValue, courierId, paymentMethod } = req.body;
-    
-    // Populate actual DB weights, dimensions and category
-    const products = await Product.find({ id: { $in: items.map(i => i.id) } }).lean();
-    const itemsForShipping = items.map(item => {
-      const product = products.find(p => String(p.id) === String(item.id));
-      return {
-        ...item,
-        weightKg: product?.weightKg,
-        dimensions: product?.dimensions,
-        category: product?.category
-      };
-    });
-
+    const { items, city, state, method, invoiceValue } = req.body;
     const zoneKey = await detectZone(city, state);
-    const result = await calculateCharges(itemsForShipping, zoneKey, method || "PER_KG", invoiceValue || 0, courierId, paymentMethod);
+    const result = await calculateCharges(items, zoneKey, method || "PER_KG", invoiceValue || 0);
     res.json(result);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -2387,192 +1723,84 @@ app.post("/api/admin/products/bulk-import", auth, adminOnly, upload.single("file
     for (let i = 0; i < data.length; i++) {
       const row = data[i];
       try {
-        const hasVal = (keys) => getVal(row, keys) !== undefined;
+        // Parse Features (split by newline or comma)
+        const featuresText = getVal(row, ["Features (One per line)", "Features", "features"]) || "";
+        const features = typeof featuresText === 'string'
+          ? featuresText.split(/\n|,/).map(f => f.trim()).filter(f => f !== "")
+          : [String(featuresText)];
 
-        // Try to identify if the product already exists matching ID, SKU, or Name
-        const rowId = getVal(row, ["Product ID", "id", "ID"]);
-        const rowSku = getVal(row, ["SKU", "sku"]);
-        const rowName = getVal(row, ["Product Name", "Name", "name", "Title"]);
+        // Parse Specifications (Key: Value per line)
+        const specsText = getVal(row, ["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"]) || "";
+        const specifications = {};
+        if (typeof specsText === 'string') {
+          specsText.split("\n").forEach(line => {
+            const [key, ...valParts] = line.split(":");
+            if (key && valParts.length > 0) {
+              specifications[key.trim()] = valParts.join(":").trim();
+            }
+          });
+        }
 
+        // Parse Additional Images (comma separated)
+        const additionalImagesText = getVal(row, ["Additional Images", "images", "Images"]) || "";
+        const images = typeof additionalImagesText === 'string'
+          ? additionalImagesText.split(",").map(img => img.trim()).filter(img => img !== "")
+          : (additionalImagesText ? [String(additionalImagesText)] : []);
+
+        // Auto-generate Slug if empty
+        let name = getVal(row, ["Product Name", "Name", "name", "Title"]);
+        let slug = getVal(row, ["Slug", "slug"]) || "";
+        if (!slug && name) {
+          slug = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        }
+
+        const price = getVal(row, ["Price", "price", "Rate", "Cost"]);
+
+        const productData = {
+          id: Number(getVal(row, ["Product ID", "id", "ID"])) || undefined,
+          name: name,
+          sku: String(getVal(row, ["SKU", "sku"]) || "").trim(),
+          slug: slug,
+          brand: getVal(row, ["Brand", "brand"]) || "",
+          category: getVal(row, ["Category", "category"]) || "",
+          subcategory: getVal(row, ["Subcategory", "subcategory"]) || "",
+          price: price !== undefined ? Number(price) : undefined,
+          stock: Number(getVal(row, ["Stock", "stock", "Quantity", "Qty"]) || 0),
+          description: getVal(row, ["Description", "description", "Desc"]) || "",
+          image: getVal(row, ["Main Image URL", "Image", "image", "Thumbnail"]) || "",
+          images: images.map(url => ({ url, publicId: "" })),
+          catalogue: getVal(row, ["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"]) || "",
+          keywords: getVal(row, ["Keywords (comma separated)", "Keywords", "keywords", "Tags"]) || "",
+          hsnCode: getVal(row, ["HSN Code", "hsnCode", "HSN"]) || "",
+          features: features,
+          specifications: specifications,
+          isActive: true
+        };
+
+        if (!productData.name) {
+          errors.push(`Row ${i + 2}: Product Name is missing`);
+          continue;
+        }
+        if (productData.price === undefined || isNaN(productData.price)) {
+          errors.push(`Row ${i + 2}: Valid Price is required`);
+          continue;
+        }
+
+        // Check if product already exists (by ID or SKU)
         let existingProduct = null;
-
-        if (rowId && !isNaN(Number(rowId))) {
-          existingProduct = await Product.findOne({ id: Number(rowId) });
-        }
-        if (!existingProduct && rowSku && String(rowSku).trim()) {
-          existingProduct = await Product.findOne({ sku: String(rowSku).trim() });
-        }
-        if (!existingProduct && rowName && String(rowName).trim()) {
-          existingProduct = await Product.findOne({ name: { $regex: new RegExp("^" + String(rowName).trim().replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + "$", "i") } });
+        if (productData.id) {
+          existingProduct = await Product.findOne({ id: productData.id });
+        } else if (productData.sku) {
+          existingProduct = await Product.findOne({ sku: productData.sku });
         }
 
         if (existingProduct) {
-          // UPDATE MODE: Update only the provided fields in Excel row
-          if (hasVal(["Product Name", "Name", "name", "Title"])) {
-            existingProduct.name = String(rowName).trim();
-          }
-          if (hasVal(["SKU", "sku"])) {
-            existingProduct.sku = String(rowSku).trim();
-          }
-          
-          let slugVal = getVal(row, ["Slug", "slug"]);
-          if (slugVal !== undefined) {
-            existingProduct.slug = String(slugVal).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-          } else if (hasVal(["Product Name", "Name", "name", "Title"])) {
-            existingProduct.slug = String(rowName).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-          }
-
-          if (hasVal(["Brand", "brand"])) {
-            existingProduct.brand = String(getVal(row, ["Brand", "brand"]) || "").trim();
-          }
-          if (hasVal(["Category", "category"])) {
-            existingProduct.category = String(getVal(row, ["Category", "category"]) || "").trim();
-          }
-          if (hasVal(["Subcategory", "subcategory"])) {
-            existingProduct.subcategory = String(getVal(row, ["Subcategory", "subcategory"]) || "").trim();
-          }
-          if (hasVal(["Price", "price", "Rate", "Cost"])) {
-            const priceVal = Number(getVal(row, ["Price", "price", "Rate", "Cost"]));
-            if (!isNaN(priceVal)) existingProduct.price = priceVal;
-          }
-          if (hasVal(["Stock", "stock", "Quantity", "Qty"])) {
-            const stockVal = Number(getVal(row, ["Stock", "stock", "Quantity", "Qty"]));
-            if (!isNaN(stockVal)) existingProduct.stock = stockVal;
-          }
-          if (hasVal(["Weight Kg", "weightKg", "Weight (Kg)", "Weight", "weight"])) {
-            const weightVal = Number(getVal(row, ["Weight Kg", "weightKg", "Weight (Kg)", "Weight", "weight"]));
-            if (!isNaN(weightVal)) existingProduct.weightKg = weightVal;
-          }
-
-          const lenVal = getVal(row, ["Length cm", "length", "Length (cm)", "Length", "length"]);
-          const widVal = getVal(row, ["Width cm", "width", "Width (cm)", "Width", "width"]);
-          const heiVal = getVal(row, ["Height cm", "height", "Height (cm)", "Height", "height"]);
-          if (lenVal !== undefined || widVal !== undefined || heiVal !== undefined) {
-            const d = { ...(existingProduct.dimensions || { length: 0, width: 0, height: 0 }) };
-            if (lenVal !== undefined && !isNaN(Number(lenVal))) d.length = Number(lenVal);
-            if (widVal !== undefined && !isNaN(Number(widVal))) d.width = Number(widVal);
-            if (heiVal !== undefined && !isNaN(Number(heiVal))) d.height = Number(heiVal);
-            existingProduct.dimensions = d;
-          }
-
-          if (hasVal(["Description", "description", "Desc"])) {
-            existingProduct.description = String(getVal(row, ["Description", "description", "Desc"]) || "").trim();
-          }
-          if (hasVal(["Main Image URL", "Image", "image", "Thumbnail"])) {
-            existingProduct.image = String(getVal(row, ["Main Image URL", "Image", "image", "Thumbnail"]) || "").trim();
-          }
-          if (hasVal(["Additional Images", "images", "Images"])) {
-            const additionalImagesText = getVal(row, ["Additional Images", "images", "Images"]) || "";
-            const imagesArr = typeof additionalImagesText === 'string'
-              ? additionalImagesText.split(",").map(img => img.trim()).filter(img => img !== "")
-              : (additionalImagesText ? [String(additionalImagesText)] : []);
-            existingProduct.images = imagesArr.map(url => ({ url, publicId: "" }));
-          }
-          if (hasVal(["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"])) {
-            existingProduct.catalogue = String(getVal(row, ["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"]) || "").trim();
-          }
-          if (hasVal(["Keywords (comma separated)", "Keywords", "keywords", "Tags"])) {
-            existingProduct.keywords = String(getVal(row, ["Keywords (comma separated)", "Keywords", "keywords", "Tags"]) || "").trim();
-          }
-          if (hasVal(["HSN Code", "hsnCode", "HSN"])) {
-            existingProduct.hsnCode = String(getVal(row, ["HSN Code", "hsnCode", "HSN"]) || "").trim();
-          }
-          if (hasVal(["Features (One per line)", "Features", "features"])) {
-            const featuresText = getVal(row, ["Features (One per line)", "Features", "features"]) || "";
-            const featuresArr = typeof featuresText === 'string'
-              ? featuresText.split(/\n|,/).map(f => f.trim()).filter(f => f !== "")
-              : [String(featuresText)];
-            existingProduct.features = featuresArr;
-          }
-          if (hasVal(["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"])) {
-            const specsText = getVal(row, ["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"]) || "";
-            const specificationsObj = {};
-            if (typeof specsText === 'string') {
-              specsText.split("\n").forEach(line => {
-                const [key, ...valParts] = line.split(":");
-                if (key && valParts.length > 0) {
-                  specificationsObj[key.trim()] = valParts.join(":").trim();
-                }
-              });
-            }
-            existingProduct.specifications = specificationsObj;
-          }
-          if (hasVal(["Active", "isActive", "Status"])) {
-            const activeVal = String(getVal(row, ["Active", "isActive", "Status"]) || "").toLowerCase();
-            existingProduct.isActive = activeVal === "true" || activeVal === "yes" || activeVal === "active" || activeVal === "1";
-          }
-
+          // Update existing product
+          Object.assign(existingProduct, productData);
           await existingProduct.save();
           importedProducts.push(existingProduct);
         } else {
-          // CREATE MODE: Require Product Name and Price
-          if (!rowName || !String(rowName).trim()) {
-            errors.push(`Row ${i + 2}: Product Name is required for creating a new product`);
-            continue;
-          }
-          const price = getVal(row, ["Price", "price", "Rate", "Cost"]);
-          if (price === undefined || isNaN(Number(price))) {
-            errors.push(`Row ${i + 2}: Valid Price is required for creating a new product`);
-            continue;
-          }
-
-          // Parse Features (split by newline or comma)
-          const featuresText = getVal(row, ["Features (One per line)", "Features", "features"]) || "";
-          const features = typeof featuresText === 'string'
-            ? featuresText.split(/\n|,/).map(f => f.trim()).filter(f => f !== "")
-            : [String(featuresText)];
-
-          // Parse Specifications (Key: Value per line)
-          const specsText = getVal(row, ["Specifications (Key: Value per line)", "Specifications", "specifications", "Specs"]) || "";
-          const specifications = {};
-          if (typeof specsText === 'string') {
-            specsText.split("\n").forEach(line => {
-              const [key, ...valParts] = line.split(":");
-              if (key && valParts.length > 0) {
-                specifications[key.trim()] = valParts.join(":").trim();
-              }
-            });
-          }
-
-          // Parse Additional Images (comma separated)
-          const additionalImagesText = getVal(row, ["Additional Images", "images", "Images"]) || "";
-          const images = typeof additionalImagesText === 'string'
-            ? additionalImagesText.split(",").map(img => img.trim()).filter(img => img !== "")
-            : (additionalImagesText ? [String(additionalImagesText)] : []);
-
-          let slug = getVal(row, ["Slug", "slug"]) || "";
-          if (!slug) {
-            slug = String(rowName).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-          }
-
-          const weightKg = Number(getVal(row, ["Weight Kg", "weightKg", "Weight (Kg)", "Weight", "weight"])) || 0;
-          const length = Number(getVal(row, ["Length cm", "length", "Length (cm)", "Length", "length"])) || 0;
-          const width = Number(getVal(row, ["Width cm", "width", "Width (cm)", "Width", "width"])) || 0;
-          const height = Number(getVal(row, ["Height cm", "height", "Height (cm)", "Height", "height"])) || 0;
-
-          const productData = {
-            id: Number(rowId) || undefined,
-            name: String(rowName).trim(),
-            sku: String(rowSku || "").trim(),
-            slug: slug,
-            brand: String(getVal(row, ["Brand", "brand"]) || "").trim(),
-            category: String(getVal(row, ["Category", "category"]) || "").trim(),
-            subcategory: String(getVal(row, ["Subcategory", "subcategory"]) || "").trim(),
-            price: Number(price),
-            stock: Number(getVal(row, ["Stock", "stock", "Quantity", "Qty"]) || 0),
-            weightKg: weightKg,
-            dimensions: { length, width, height },
-            description: String(getVal(row, ["Description", "description", "Desc"]) || "").trim(),
-            image: String(getVal(row, ["Main Image URL", "Image", "image", "Thumbnail"]) || "").trim(),
-            images: images.map(url => ({ url, publicId: "" })),
-            catalogue: String(getVal(row, ["Technical PDF Catalogue", "Catalogue", "catalogue", "PDF"]) || "").trim(),
-            keywords: String(getVal(row, ["Keywords (comma separated)", "Keywords", "keywords", "Tags"]) || "").trim(),
-            hsnCode: String(getVal(row, ["HSN Code", "hsnCode", "HSN"]) || "").trim(),
-            features: features,
-            specifications: specifications,
-            isActive: true
-          };
-
+          // Create new product
           const newProduct = new Product(productData);
           await newProduct.save();
           importedProducts.push(newProduct);
