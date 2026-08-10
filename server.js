@@ -229,8 +229,8 @@ const authLimiter = rateLimit({
   message: "Too many login attempts, please try again after an hour"
 });
 
-// app.use("/api/", globalLimiter);
-// app.use("/api/auth/login", authLimiter);
+app.use("/api/", globalLimiter);
+app.use("/api/auth/login", authLimiter);
 
 // Specialized limiter for payment creation (High Risk)
 const paymentLimiter = rateLimit({
@@ -238,7 +238,7 @@ const paymentLimiter = rateLimit({
   max: isProduction ? 30 : 5000, // 30 in production, 5000 in development/testing
   message: "Order frequency limit reached. Please wait a few minutes."
 });
-// app.use("/api/payment/create-order", paymentLimiter);
+app.use("/api/payment/create-order", paymentLimiter);
 
 // --- RBAC Middleware ---
 const authorize = (roles = []) => {
