@@ -3226,9 +3226,10 @@ YOUR SKILLS & RULES:
 
     // Try multiple model versions in order of preference, including preview models for your specific key
     const modelsToTry = [
+      "gemini-3.5-flash-lite",
+      "gemini-flash-lite-latest",
       "gemini-3.5-flash",
-      "gemini-flash-latest",
-      "gemini-2.5-flash"
+      "gemini-flash-latest"
     ];
 
     for (const modelName of modelsToTry) {
