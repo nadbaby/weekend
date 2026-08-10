@@ -3175,7 +3175,24 @@ app.post("/api/chat", async (req, res) => {
     // 2. Live AI Mode
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-    const productContext = products.map(p => {
+    // --- NEW: Context Optimization (Local Token Pre-Filter) ---
+    const searchTerms = (message || "").toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    let matchedProducts = [];
+
+    if (searchTerms.length > 0) {
+      matchedProducts = products.filter(p => {
+        const productText = `${p.name} ${p.sku} ${p.category} ${p.subcategory} ${p.brand} ${p.description} ${Array.isArray(p.keywords) ? p.keywords.join(' ') : p.keywords || ''}`.toLowerCase();
+        // Check if ANY of the search terms appear in the product metadata
+        return searchTerms.some(term => productText.includes(term));
+      }).slice(0, 15); // Cap to 15 products max to save Tokens
+    }
+
+    if (matchedProducts.length === 0) {
+      // Just grab first 5 items for generic hellos
+      matchedProducts = products.slice(0, 5);
+    }
+
+    const productContext = matchedProducts.map(p => {
       let dimensionsStr = 'N/A';
       if (p.dimensions && (p.dimensions.length || p.dimensions.width || p.dimensions.height)) {
         dimensionsStr = `${p.dimensions.length || 0}x${p.dimensions.width || 0}x${p.dimensions.height || 0} mm`;
