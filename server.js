@@ -3292,7 +3292,7 @@ YOUR SKILLS & RULES:
       userMessage = "I am currently experiencing very high demand and have reached my rate limit. Please wait a minute and try asking again!";
     }
 
-    res.status(500).json({
+    res.status(200).json({
       message: "Failed to process chat",
       error: error.message,
       reply: userMessage
