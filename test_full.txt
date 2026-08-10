@@ -1,0 +1,9 @@
+◇ injected env (19) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+Products length: 67028
+Hello! How can I help you today with this product list? 
+
+Let me know if you need to:
+* Find a specific SKU or product name
+* Filter or search for items (e.g., bearings, oil seals, couplings, pumps)
+* Convert this data into a table or spreadsheet format
+* Anything else!

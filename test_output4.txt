@@ -1,0 +1,2 @@
+◇ injected env (19) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+SUCCESS: Hello! How can I help you today?

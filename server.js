@@ -3226,11 +3226,9 @@ YOUR SKILLS & RULES:
 
     // Try multiple model versions in order of preference, including preview models for your specific key
     const modelsToTry = [
-      "gemini-2.5-flash",
+      "gemini-3.5-flash",
       "gemini-flash-latest",
-      "gemini-3.1-flash-preview",
-      "gemini-1.5-flash",
-      "gemini-pro"
+      "gemini-2.5-flash"
     ];
 
     for (const modelName of modelsToTry) {
@@ -3290,6 +3288,8 @@ YOUR SKILLS & RULES:
       userMessage = "The configured Gemini API Key is invalid or expired. Please generate a new one at aistudio.google.com and update your .env file.";
     } else if (error.message?.includes("safety")) {
       userMessage = "I'm sorry, but I cannot answer that question due to safety filters.";
+    } else if (error.message?.includes("retry") || error.message?.includes("429") || error.message?.includes("quota")) {
+      userMessage = "I am currently experiencing very high demand and have reached my rate limit. Please wait a minute and try asking again!";
     }
 
     res.status(500).json({

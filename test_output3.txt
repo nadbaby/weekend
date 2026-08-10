@@ -1,0 +1,2 @@
+◇ injected env (19) from .env // tip: ⌘ suppress logs { quiet: true }
+FAILED_EXACTLY: [GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent: [404 Not Found] This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use a newer model for the latest features and improvements.
