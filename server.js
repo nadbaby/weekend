@@ -3286,8 +3286,8 @@ YOUR SKILLS & RULES:
     console.error("❌ [Chat Error]:", error);
 
     let userMessage = "Sorry, I encountered an error processing your request.";
-    if (error.message?.includes("API_KEY_INVALID")) {
-      userMessage = "The configured Gemini API Key is invalid. Please check your .env file.";
+    if (error.message?.includes("API_KEY_INVALID") || error.message?.includes("valid API key") || error.message?.includes("API key not valid")) {
+      userMessage = "The configured Gemini API Key is invalid or expired. Please generate a new one at aistudio.google.com and update your .env file.";
     } else if (error.message?.includes("safety")) {
       userMessage = "I'm sorry, but I cannot answer that question due to safety filters.";
     }
@@ -3295,7 +3295,7 @@ YOUR SKILLS & RULES:
     res.status(500).json({
       message: "Failed to process chat",
       error: error.message,
-      reply: userMessage + " (Check server logs for details)"
+      reply: userMessage
     });
   }
 });
