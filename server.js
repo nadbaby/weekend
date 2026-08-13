@@ -51,7 +51,7 @@ const Promotion = require("./models/Promotion");
 const admin = require("firebase-admin");
 const cloudinary = require("cloudinary").v2;
 const { deleteFromCloudinary } = require("./config/cloudinary");
-
+const compression = require("compression");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -149,6 +149,7 @@ const corsOptions = {
 };
 
 // --- Security Middleware Initialization ---
+app.use(compression());
 app.use(helmet({
   contentSecurityPolicy: false,
 }));
@@ -1244,10 +1245,83 @@ app.get("/api/products/autocomplete", async (req, res) => {
   }
 });
 
+// GET product metadata for sidebar filters
+app.get("/api/products/metadata", async (req, res) => {
+  try {
+    const brands = await Product.distinct("brand", { isActive: true });
+    const subcats = await Product.distinct("subcategory", { isActive: true });
+    const categories = await Product.distinct("category", { isActive: true });
+    res.json({
+      brands: brands.filter(Boolean),
+      categories: categories.filter(Boolean),
+      subcategories: subcats.filter(Boolean)
+    });
+  } catch (error) {
+    console.error("Metadata fetch failed:", error);
+    sendErrorResponse(res, error, "Failed to fetch metadata");
+  }
+});
+
+// GET paginated products
+app.get("/api/products/paginated", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 24;
+    const search = req.query.search || '';
+    const category = req.query.category || '';
+    const subcategory = req.query.subcategory || '';
+    const brand = req.query.brand || '';
+    const sort = req.query.sort || 'default';
+
+    const query = { isActive: { $ne: false } };
+
+    if (category && category !== 'All') query.category = category;
+    if (subcategory && subcategory !== 'All') query.subcategory = subcategory;
+    if (brand && brand !== 'All') query.brand = brand;
+    if (search) {
+      const regex = new RegExp(search, "i");
+      query.$or = [
+        { name: regex },
+        { sku: regex },
+        { keywords: regex },
+        { description: regex }
+      ];
+    }
+
+    let sortOption = { id: 1 };
+    if (sort === 'newest') sortOption = { createdAt: -1, id: -1 };
+    else if (sort === 'price-low') sortOption = { price: 1, id: 1 };
+    else if (sort === 'price-high') sortOption = { price: -1, id: 1 };
+    else if (sort === 'name-asc') sortOption = { name: 1, id: 1 };
+    else if (sort === 'name-desc') sortOption = { name: -1, id: 1 };
+
+    const totalCount = await Product.countDocuments(query);
+    const products = await Product.find(query)
+      .select("-images -specifications -features -catalogue -dimensions -weightKg")
+      .lean()
+      .sort(sortOption)
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    res.json({
+      products,
+      totalCount,
+      page,
+      totalPages: Math.ceil(totalCount / limit)
+    });
+  } catch (error) {
+    console.error("Failed to fetch paginated products:", error);
+    sendErrorResponse(res, error, "Failed to fetch paginated products");
+  }
+});
+
 // GET all products (MongoDB)
 app.get("/api/products", async (req, res) => {
   try {
-    const products = await Product.find({}).sort({ id: 1 });
+    const products = await Product.find({})
+      .select("-images -specifications -features -catalogue -dimensions -weightKg")
+      .lean()
+      .sort({ id: 1 });
     res.json(products);
   } catch (error) {
     console.error("Failed to read products:", error);
