@@ -1297,7 +1297,7 @@ app.get("/api/products/paginated", async (req, res) => {
 
     const totalCount = await Product.countDocuments(query);
     const products = await Product.find(query)
-      .select("-images -specifications -features -catalogue -dimensions -weightKg")
+      .select("-description -images -specifications -features -catalogue -dimensions -weightKg")
       .lean()
       .sort(sortOption)
       .skip((page - 1) * limit)
@@ -1319,7 +1319,7 @@ app.get("/api/products/paginated", async (req, res) => {
 app.get("/api/products", async (req, res) => {
   try {
     const products = await Product.find({})
-      .select("-images -specifications -features -catalogue -dimensions -weightKg")
+      .select("-description -images -specifications -features -catalogue -dimensions -weightKg")
       .lean()
       .sort({ id: 1 });
     res.json(products);
