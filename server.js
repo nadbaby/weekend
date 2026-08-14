@@ -2807,6 +2807,16 @@ app.post("/api/tickets/create", auth, async (req, res) => {
 // Connect to MongoDB, then start server
 
 
+// Admin: Get All Tickets
+app.get("/api/admin/tickets", auth, async (req, res) => {
+  try {
+    const tickets = await Ticket.find({}).sort({ createdAt: -1 });
+    res.json(tickets);
+  } catch (error) {
+    sendErrorResponse(res, error, "Failed to fetch all tickets");
+  }
+});
+
 // Get My Tickets
 app.get("/api/tickets/my-tickets/:identifier", auth, async (req, res) => {
   try {
