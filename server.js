@@ -1391,7 +1391,6 @@ app.put("/api/products/:id", auth, adminOnly, async (req, res) => {
     const body = { ...req.body };
 
     if (Array.isArray(body.images)) {
-      bvbn
       body.images = body.images.map((img) =>
         typeof img === "string" ? { url: img, publicId: "" } : img
       );
