@@ -1321,7 +1321,8 @@ app.get("/api/products", async (req, res) => {
     const products = await Product.find({})
       .select("-description -images -specifications -features -catalogue -dimensions -weightKg")
       .lean()
-      .sort({ id: 1 });
+      .sort({ id: 1 })
+      .maxTimeMS(10000);
     res.json(products);
   } catch (error) {
     console.error("Failed to read products:", error);
