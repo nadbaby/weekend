@@ -1318,15 +1318,41 @@ app.get("/api/products/paginated", async (req, res) => {
 // GET all products (MongoDB)
 app.get("/api/products", async (req, res) => {
   try {
-    const products = await Product.find({})
+    res.setHeader("Content-Type", "application/json");
+    res.write("[");
+
+    const cursor = Product.find({})
       .select("-description -images -specifications -features -catalogue -dimensions -weightKg")
       .lean()
       .sort({ id: 1 })
-      .maxTimeMS(10000);
-    res.json(products);
+      .cursor({ batchSize: 500 });
+
+    let isFirst = true;
+
+    cursor.on("data", (doc) => {
+      if (!isFirst) {
+        res.write(",");
+      }
+      res.write(JSON.stringify(doc));
+      isFirst = false;
+    });
+
+    cursor.on("error", (error) => {
+      console.error("Cursor streaming error:", error);
+      // If we already started writing, we can't send a clean 500, just end the stream
+      res.end("]");
+    });
+
+    cursor.on("end", () => {
+      res.write("]");
+      res.end();
+    });
+
   } catch (error) {
-    console.error("Failed to read products:", error);
-    sendErrorResponse(res, error, "Failed to read products");
+    console.error("Failed to initialize product stream:", error);
+    if (!res.headersSent) {
+      sendErrorResponse(res, error, "Failed to read products");
+    }
   }
 });
 
