@@ -245,12 +245,56 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: isProduction ? 20 : 10000, // 20 in production, 10,000 in development/testing
+  max: isProduction ? 20 : 10000,
   message: "Too many login attempts, please try again after an hour"
 });
 
+// Strict dedicated rate limiter for OTP send/verify endpoints
+// Prevents brute-force and enumeration attacks per IP address
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: isProduction ? 10 : 10000, // 10 OTP actions per IP per 15 min in prod
+  message: { message: "Too many OTP requests from this IP. Please try again in 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: false, // count every request, successful or not
+});
+
+// ─── Input Validators ───────────────────────────────────────────────────────
+// Accepts: +91xxxxxxxxxx | 91xxxxxxxxxx | 10-digit Indian mobile | any E.164
+const PHONE_REGEX = /^(\+?91[6-9]\d{9}|[6-9]\d{9}|\+[1-9]\d{6,14})$/;
+const OTP_REGEX   = /^\d{6}$/;
+
+const validatePhone = (phone) => PHONE_REGEX.test(String(phone || '').trim());
+const validateOtp   = (otp)   => OTP_REGEX.test(String(otp   || '').trim());
+
+// ─── OTP Error → HTTP response helper ───────────────────────────────────────
+const otpErrorResponse = (res, result) => {
+  if (result.reason === 'locked') {
+    const min = Math.ceil(result.remainingSec / 60);
+    return res.status(429).json({
+      message: `Too many failed attempts. Try again in ${min} minute${min !== 1 ? 's' : ''}.`
+    });
+  }
+  if (result.reason === 'expired') {
+    return res.status(401).json({ message: "OTP has expired. Please request a new one." });
+  }
+  if (result.reason === 'mismatch') {
+    const left = result.attemptsLeft;
+    return res.status(401).json({
+      message: `Invalid OTP. ${left} attempt${left !== 1 ? 's' : ''} remaining.`
+    });
+  }
+  return res.status(401).json({ message: "Invalid or expired OTP." });
+};
+
 app.use("/api/", globalLimiter);
 app.use("/api/auth/login", authLimiter);
+// Apply strict OTP IP rate limiter to all OTP endpoints
+app.use("/api/auth/send-otp",       otpLimiter);
+app.use("/api/auth/verify-otp",     otpLimiter);
+app.use("/api/auth/verify-otp-only",otpLimiter);
+app.use("/api/auth/register-otp",   otpLimiter);
 
 // Specialized limiter for payment creation (High Risk)
 const paymentLimiter = rateLimit({
@@ -388,7 +432,7 @@ app.use("/api/shipping", shippingRoutes);
 app.use("/api/user", auth, userRoutes);
 app.use("/api/admin", auth, adminRoutes);
 const multer = require("multer");
-const { sendOtp, verifyOtp, peekOtp, normalizePhone, sendSMSOrderAlert, sendWhatsAppOrderAlert, sendAdminNewOrderAlert, sendPromotionalSMS, sendPromotionalWhatsApp } = require("./twiloapi");
+const { sendOtp, verifyOtp, peekOtp, isPhoneLocked, normalizePhone, sendSMSOrderAlert, sendWhatsAppOrderAlert, sendAdminNewOrderAlert, sendPromotionalSMS, sendPromotionalWhatsApp } = require("./twiloapi");
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -682,12 +726,47 @@ app.get("/api/auth/profile", auth, async (req, res) => {
 // Sync Firebase User with MongoDB
 app.post("/api/auth/sync", auth, async (req, res) => {
   const { name, company, gstNumber } = req.body;
-  const phone = (req.body.phone && req.body.phone.trim()) ? req.body.phone.trim() : undefined;
-  console.log(`[SYNC] Attempting sync for UID: ${req.user.uid}, Email: ${req.user.email}`);
+  const rawPhone = (req.body.phone && req.body.phone.trim()) ? req.body.phone.trim() : undefined;
+  const preRegToken = req.body.preRegToken || req.headers['x-pre-reg-token'] || null;
+  console.log(`[SYNC] Attempting sync for UID: ${req.user.uid}, Email: ${req.user.email}, Phone provided: ${!!rawPhone}`);
 
   if (!req.user || !req.user.uid) {
     return res.status(401).json({ message: "Invalid user session" });
   }
+
+  // If a phone number is included, validate the preRegToken to prove OTP was verified.
+  // This prevents Burp Suite / API tampering where an attacker sends an arbitrary phone
+  // without actually completing OTP verification.
+  let verifiedPhone = undefined;
+  if (rawPhone) {
+    if (!preRegToken) {
+      console.warn(`[SYNC] Phone provided without preRegToken for UID: ${req.user.uid}. Ignoring phone.`);
+      // Don't block the sync — just ignore the phone (graceful degradation)
+      verifiedPhone = undefined;
+    } else {
+      try {
+        const decoded = jwt.verify(preRegToken, JWT_SECRET);
+        if (decoded.purpose !== 'pre-register') {
+          throw new Error('Invalid token purpose');
+        }
+        // Ensure the phone in the token matches the phone in the request
+        const tokenPhone = decoded.phone;
+        const requestPhone = normalizePhone(rawPhone);
+        if (tokenPhone !== requestPhone) {
+          console.warn(`[SYNC] preRegToken phone mismatch: token="${tokenPhone}" vs request="${requestPhone}"`);
+          throw new Error('Phone number mismatch');
+        }
+        verifiedPhone = requestPhone; // Trust only the phone from the verified token
+        console.log(`[SYNC] preRegToken valid for phone: ${verifiedPhone}`);
+      } catch (err) {
+        console.warn(`[SYNC] Invalid or expired preRegToken: ${err.message}`);
+        return res.status(401).json({ message: "Phone OTP verification has expired or is invalid. Please verify your phone number again." });
+      }
+    }
+  }
+
+  // Use the OTP-verified phone, or undefined if not verified
+  const phone = verifiedPhone;
 
   try {
     // 1. Check if user exists in Employee collection (Admins/Staff)
@@ -850,15 +929,21 @@ const employeeOrAdmin = async (req, res, next) => {
 
 // Send OTP
 app.post("/api/auth/send-otp", async (req, res) => {
-  const { phone } = req.body;
-  const rawPhone = String(phone || '').trim();
-  console.log(`[POST /api/auth/send-otp] Request for: "${rawPhone}"`);
-  if (!rawPhone) return res.status(400).json({ message: "Phone number is required" });
+  const rawPhone = String(req.body.phone || '').trim();
+  console.log(`[POST /api/auth/send-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
+
+  if (!rawPhone) return res.status(400).json({ message: "Phone number is required." });
+  if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
+
+  // Check lockout before even generating a new OTP
+  const lockStatus = isPhoneLocked(rawPhone);
+  if (lockStatus && lockStatus.locked) {
+    const min = Math.ceil(lockStatus.remainingSec / 60);
+    return res.status(429).json({ message: `Account temporarily locked due to failed attempts. Try again in ${min} minute${min !== 1 ? 's' : ''}.` });
+  }
 
   try {
     const result = await sendOtp(rawPhone);
-    // Always return devOtp in the response so all flows (login, signup, email-signup)
-    // can show it to the user when running in dev/fallback mode (no real Twilio creds).
     res.json(result);
   } catch (error) {
     console.error("[send-otp] Error:", error.message);
@@ -866,36 +951,48 @@ app.post("/api/auth/send-otp", async (req, res) => {
   }
 });
 
-// Verify OTP only (NON-CONSUMING) — used as a pre-check before registration.
-// The OTP remains valid in the store so the subsequent register-otp call can consume it.
+// Verify OTP only (NON-CONSUMING) — issues a short-lived signed preRegToken.
+// The frontend must present this token to /api/auth/sync when registering with a phone.
+// This closes the attack vector of calling /sync with an arbitrary phone without OTP proof.
 app.post("/api/auth/verify-otp-only", async (req, res) => {
-  const { phone, otp } = req.body;
-  const rawPhone = String(phone || '').trim();
-  const rawOtp   = String(otp   || '').trim();
-  console.log(`[POST /api/auth/verify-otp-only] Phone: "${rawPhone}", OTP: "${rawOtp}"`);
-  if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required" });
+  const rawPhone = String(req.body.phone || '').trim();
+  const rawOtp   = String(req.body.otp   || '').trim();
+  console.log(`[POST /api/auth/verify-otp-only] IP: ${req.ip} | Phone: "${rawPhone}"`);
 
-  // peekOtp validates WITHOUT deleting from the store
-  const isValid = peekOtp(rawPhone, rawOtp);
-  if (!isValid) return res.status(401).json({ message: "Invalid or expired OTP" });
+  if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
+  if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
+  if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
 
-  return res.json({ success: true, message: "OTP verified" });
+  // peekOtp validates WITHOUT deleting so register-otp can still consume it
+  const result = peekOtp(rawPhone, rawOtp);
+  if (!result.ok) return otpErrorResponse(res, result);
+
+  // Issue a short-lived signed preRegToken so the frontend can prove OTP was verified
+  // without being able to forge a phone number on the subsequent /sync call.
+  const preRegToken = jwt.sign(
+    { phone: normalizePhone(rawPhone), nonce: result.nonce, purpose: 'pre-register' },
+    JWT_SECRET,
+    { expiresIn: '5m' }
+  );
+
+  return res.json({ success: true, message: "OTP verified", preRegToken });
 });
 
 // Verify OTP & Login (CONSUMING — logs user in)
 app.post("/api/auth/verify-otp", async (req, res) => {
-  const { phone, otp } = req.body;
-  const rawPhone = String(phone || '').trim();
-  const rawOtp   = String(otp   || '').trim();
-  console.log(`[POST /api/auth/verify-otp] Phone: "${rawPhone}", OTP: "${rawOtp}"`);
-  if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required" });
+  const rawPhone = String(req.body.phone || '').trim();
+  const rawOtp   = String(req.body.otp   || '').trim();
+  console.log(`[POST /api/auth/verify-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
 
-  const isValid = verifyOtp(rawPhone, rawOtp);
-  if (!isValid) return res.status(401).json({ message: "Invalid or expired OTP" });
+  if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
+  if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
+  if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
+
+  const result = verifyOtp(rawPhone, rawOtp);
+  if (!result.ok) return otpErrorResponse(res, result);
 
   const formatted = normalizePhone(rawPhone);
 
-  // Flexible DB phone matching (handles +91xxxxxxx, 91xxxxxxx, xxxxxxxxxx)
   const existingUser = await User.findOne({
     $or: [
       { phone: rawPhone },
@@ -915,11 +1012,7 @@ app.post("/api/auth/verify-otp", async (req, res) => {
     role: "user"
   }, JWT_SECRET, { expiresIn: "3650d" });
 
-  res.json({
-    success: true,
-    token,
-    user: existingUser
-  });
+  res.json({ success: true, token, user: existingUser });
 });
 
 // Standard Signup Route
@@ -968,17 +1061,17 @@ app.post("/api/auth/signup", async (req, res) => {
 
 // Verify OTP & Register (CONSUMING — creates account)
 app.post("/api/auth/register-otp", async (req, res) => {
-  const { phone, otp, name, company, password } = req.body;
-  const rawPhone = String(phone || '').trim();
-  const rawOtp   = String(otp   || '').trim();
-  console.log(`[POST /api/auth/register-otp] Phone: "${rawPhone}", OTP: "${rawOtp}", Name: "${name}"`);
+  const rawPhone = String(req.body.phone || '').trim();
+  const rawOtp   = String(req.body.otp   || '').trim();
+  const { name, company, password } = req.body;
+  console.log(`[POST /api/auth/register-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
 
-  if (!rawPhone || !rawOtp || !name) {
-    return res.status(400).json({ message: "Phone, OTP, and Name are required" });
-  }
+  if (!rawPhone || !rawOtp || !name) return res.status(400).json({ message: "Phone, OTP, and Name are required." });
+  if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
+  if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
 
-  const isValid = verifyOtp(rawPhone, rawOtp);
-  if (!isValid) return res.status(401).json({ message: "Invalid or expired OTP" });
+  const result = verifyOtp(rawPhone, rawOtp);
+  if (!result.ok) return otpErrorResponse(res, result);
 
   const formatted = normalizePhone(rawPhone);
 
@@ -990,9 +1083,7 @@ app.post("/api/auth/register-otp", async (req, res) => {
       { phone: '91' + rawPhone.replace(/^\+91/, '').replace(/^91/, '') }
     ]
   });
-  if (userExists) {
-    return res.status(400).json({ message: "This phone number is already registered. Please log in instead." });
-  }
+  if (userExists) return res.status(400).json({ message: "This phone number is already registered. Please log in instead." });
 
   const newUser = new User({
     id: "u_" + Date.now(),

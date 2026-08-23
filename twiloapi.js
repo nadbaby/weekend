@@ -46,23 +46,65 @@ if (isTwilioConfigured) {
     console.warn("⚠️ [Twilio Warning] Running in offline/development mode. SMS messages will be logged to the console.");
 }
 
-// In-memory OTP storage (phone → { otp, expires, lastSent })
+// Security constants
+const MAX_OTP_ATTEMPTS  = 5;          // max wrong guesses before lockout
+const LOCKOUT_DURATION  = 15 * 60 * 1000; // 15 minutes in ms
+const OTP_TTL           = 5  * 60 * 1000; // 5 minutes in ms
+const RESEND_COOLDOWN   = 30 * 1000;      // 30 seconds between resends
+
+// In-memory OTP storage
+// phone → { otp, expires, lastSent, nonce, attempts, lockedUntil }
 const otpStore = new Map();
 
-// Periodic background cleanup of expired OTPs to prevent memory leaks (every 10 minutes)
+/**
+ * Constant-time string comparison to prevent timing-based side-channel attacks.
+ */
+const safeEqual = (a, b) => {
+    const sa = String(a);
+    const sb = String(b);
+    if (sa.length !== sb.length) return false;
+    let diff = 0;
+    for (let i = 0; i < sa.length; i++) {
+        diff |= sa.charCodeAt(i) ^ sb.charCodeAt(i);
+    }
+    return diff === 0;
+};
+
+// Periodic background cleanup (every 10 minutes)
 setInterval(() => {
     const now = Date.now();
     let cleaned = 0;
     for (const [phone, data] of otpStore.entries()) {
-        if (now > data.expires) {
+        // Keep locked entries until lockout expires, remove expired+unlocked entries
+        const lockExpired  = !data.lockedUntil || now > data.lockedUntil;
+        const otpExpired   = now > data.expires;
+        if (otpExpired && lockExpired) {
             otpStore.delete(phone);
             cleaned++;
         }
     }
     if (cleaned > 0) {
-        console.log(`🧹 [Twilio OTP Garbage Collector] Cleaned up ${cleaned} expired OTP entries from memory.`);
+        console.log(`🧹 [OTP GC] Cleaned up ${cleaned} expired OTP entries.`);
     }
-}, 10 * 60 * 1000).unref(); // Use unref() so the interval does not keep the Node process alive in scripts/tests
+}, 10 * 60 * 1000).unref();
+
+/**
+ * Returns true if the phone is currently locked out due to too many failed attempts.
+ * @param {string} phone  raw or E.164 phone
+ */
+const isPhoneLocked = (phone) => {
+    const formattedPhone = normalizePhone ? normalizePhone(phone) : phone;
+    const entry = otpStore.get(formattedPhone);
+    if (!entry || !entry.lockedUntil) return false;
+    if (Date.now() < entry.lockedUntil) {
+        const remainingSec = Math.ceil((entry.lockedUntil - Date.now()) / 1000);
+        console.log(`🔒 [OTP Lock] ${formattedPhone} is locked for ${remainingSec}s more.`);
+        return { locked: true, remainingSec };
+    }
+    // Lockout expired — clear it
+    otpStore.delete(formattedPhone);
+    return false;
+};
 
 /**
  * Normalizes phone numbers to standard format E.164 (+919876543210)
@@ -93,137 +135,147 @@ const sendOtp = async (phone) => {
     const formattedPhone = normalizePhone(phone);
     if (!formattedPhone) throw new Error('Invalid phone number format');
 
-    const now = Date.now();
+    const now  = Date.now();
     const existing = otpStore.get(formattedPhone);
 
-    // Rate-limit: 30 seconds between requests per number
-    if (existing && (now - existing.lastSent < 30000)) {
-        const remainingSeconds = Math.ceil((30000 - (now - existing.lastSent)) / 1000);
-        throw new Error(`Please wait ${remainingSeconds} seconds before requesting a new OTP.`);
+    // Reject if phone is currently locked out
+    if (existing && existing.lockedUntil && now < existing.lockedUntil) {
+        const remainingSec = Math.ceil((existing.lockedUntil - now) / 1000);
+        throw new Error(`Too many failed attempts. Please try again in ${remainingSec} seconds.`);
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiry = now + (5 * 60 * 1000); // Strictly 5 minutes expiry
+    // Rate-limit: enforce RESEND_COOLDOWN between send requests
+    if (existing && (now - existing.lastSent < RESEND_COOLDOWN)) {
+        const remainingSec = Math.ceil((RESEND_COOLDOWN - (now - existing.lastSent)) / 1000);
+        throw new Error(`Please wait ${remainingSec} seconds before requesting a new OTP.`);
+    }
 
-    // Store in memory (keyed by normalized phone number)
+    const otp   = Math.floor(100000 + Math.random() * 900000).toString();
+    const nonce = require('crypto').randomBytes(16).toString('hex'); // unique per OTP for anti-replay
+    const expiry = now + OTP_TTL;
+
+    // Store entry — reset attempts on new OTP request
     otpStore.set(formattedPhone, {
-        otp: String(otp).trim(),
-        expires: expiry,
-        lastSent: now
+        otp:          String(otp).trim(),
+        nonce,
+        expires:      expiry,
+        lastSent:     now,
+        attempts:     0,
+        lockedUntil:  null
     });
 
-    console.log(`🔑 [OTP Store] Generated OTP for ${formattedPhone}: ${otp} (Expires in 5 minutes)`);
+    console.log(`🔑 [OTP] Generated for ${formattedPhone} (expires ${new Date(expiry).toISOString()}, nonce: ${nonce.slice(0,8)}...)`);
 
     if (!isTwilioConfigured) {
         console.log(`\n==================================================`);
         console.log(`[Twilio Dev Fallback] OTP for ${formattedPhone} is: ${otp}`);
         console.log(`==================================================\n`);
-        return { success: true, messageId: "dev-fallback-sid", isDevFallback: true, devOtp: otp };
+        return { success: true, messageId: 'dev-fallback-sid', isDevFallback: true, devOtp: otp };
     }
 
     try {
         const message = await client.messages.create({
             body: `Your Fine Bearing OTP is: ${otp}\nValid for 5 minutes. Do not share this code.`,
             from: twilioPhoneNumber,
-            to: formattedPhone
+            to:   formattedPhone
         });
-
-        console.log(`OTP sent via SMS to ${formattedPhone} | SID: ${message.sid}`);
+        console.log(`✅ [OTP] SMS sent to ${formattedPhone} | SID: ${message.sid}`);
         return { success: true, messageId: message.sid };
-
     } catch (error) {
-        console.error('Twilio SMS Error:', error.code, error.message);
+        // Roll back the stored OTP so the user can retry immediately
+        otpStore.delete(formattedPhone);
+        console.error('❌ [Twilio] SMS Error:', error.code, error.message);
         throw new Error(`Failed to send SMS: ${error.message}`);
     }
 };
 
 /**
- * Verifies the OTP for a given phone number and CONSUMES it (one-time use).
- * Use this for final login/register actions.
- * @param {string} phone
- * @param {string} otp
- * @returns {boolean}
+ * Internal helper — runs attempt tracking and lockout logic.
+ * Returns { ok: true, nonce } on match, or { ok: false, reason } on failure.
+ * @param {string} formattedPhone  Already-normalized E.164 phone
+ * @param {string} inputOtp        Trimmed OTP string
+ * @param {boolean} consume        If true, delete the entry on success (one-time use)
  */
-const verifyOtp = (phone, otp) => {
-    if (!phone || !otp) {
-        console.log(`❌ [OTP Verify] Missing parameter: phone="${phone}", otp="${otp}"`);
-        return false;
-    }
-
-    const formattedPhone = normalizePhone(phone);
-    const inputOtpStr = String(otp).trim();
-
-    console.log(`🔍 [OTP Verify] Looking up normalized phone: "${formattedPhone}" (raw: "${phone}")`);
-    console.log(`🔍 [OTP Verify] OTP store has ${otpStore.size} entries. Keys: [${[...otpStore.keys()].join(', ')}]`);
-
+const _checkOtp = (formattedPhone, inputOtp, consume) => {
     const storedData = otpStore.get(formattedPhone);
+
     if (!storedData) {
-        console.log(`❌ [OTP Verify] No stored OTP found for "${formattedPhone}"`);
-        return false;
+        console.log(`❌ [OTP] No entry for "${formattedPhone}"`);
+        return { ok: false, reason: 'not_found' };
     }
 
     const now = Date.now();
-    const remainingMs = storedData.expires - now;
-    console.log(`🔍 [OTP Verify] Found OTP for "${formattedPhone}". Expires in: ${Math.ceil(remainingMs / 1000)}s`);
 
+    // Check lockout
+    if (storedData.lockedUntil && now < storedData.lockedUntil) {
+        const sec = Math.ceil((storedData.lockedUntil - now) / 1000);
+        console.log(`🔒 [OTP] "${formattedPhone}" is locked for ${sec}s more.`);
+        return { ok: false, reason: 'locked', remainingSec: sec };
+    }
+
+    // Check expiry
     if (now > storedData.expires) {
-        console.log(`❌ [OTP Verify] OTP expired for "${formattedPhone}". Expired at: ${new Date(storedData.expires).toISOString()}`);
+        console.log(`❌ [OTP] Expired for "${formattedPhone}".`);
         otpStore.delete(formattedPhone);
-        return false;
+        return { ok: false, reason: 'expired' };
     }
 
-    const storedOtpStr = String(storedData.otp).trim();
+    const storedOtp = String(storedData.otp).trim();
 
-    if (storedOtpStr === inputOtpStr) {
-        console.log(`✅ [OTP Verify] OTP matched for "${formattedPhone}". Consuming (one-time use).`);
-        otpStore.delete(formattedPhone); // One-time use: consume OTP
-        return true;
+    // Constant-time comparison to prevent timing attacks
+    if (safeEqual(storedOtp, inputOtp)) {
+        const nonce = storedData.nonce;
+        if (consume) {
+            otpStore.delete(formattedPhone);
+            console.log(`✅ [OTP] Matched & consumed for "${formattedPhone}".`);
+        } else {
+            console.log(`✅ [OTP] Matched (peek, not consumed) for "${formattedPhone}".`);
+        }
+        return { ok: true, nonce };
     }
 
-    console.log(`❌ [OTP Verify] Mismatch for "${formattedPhone}": Stored="${storedOtpStr}" vs Received="${inputOtpStr}"`);
-    return false;
+    // Wrong OTP — increment attempt counter
+    storedData.attempts = (storedData.attempts || 0) + 1;
+    const attemptsLeft = MAX_OTP_ATTEMPTS - storedData.attempts;
+    console.log(`❌ [OTP] Wrong OTP for "${formattedPhone}". Attempts: ${storedData.attempts}/${MAX_OTP_ATTEMPTS}`);
+
+    if (storedData.attempts >= MAX_OTP_ATTEMPTS) {
+        storedData.lockedUntil = now + LOCKOUT_DURATION;
+        const lockMin = Math.ceil(LOCKOUT_DURATION / 60000);
+        console.log(`🔒 [OTP] "${formattedPhone}" locked for ${lockMin} minutes after ${MAX_OTP_ATTEMPTS} failed attempts.`);
+        return { ok: false, reason: 'locked', remainingSec: Math.ceil(LOCKOUT_DURATION / 1000) };
+    }
+
+    return { ok: false, reason: 'mismatch', attemptsLeft };
 };
 
 /**
- * Peeks at the OTP for a given phone — validates WITHOUT consuming it.
- * Use this only for a pre-check step (e.g. verify-otp-only before registration).
+ * Verifies OTP and CONSUMES it (one-time use). Use for login/register.
  * @param {string} phone
  * @param {string} otp
- * @returns {boolean}
+ * @returns {{ ok: boolean, reason?: string, nonce?: string }}
+ */
+const verifyOtp = (phone, otp) => {
+    if (!phone || !otp) return { ok: false, reason: 'missing' };
+    const formattedPhone = normalizePhone(phone);
+    const inputOtp = String(otp).trim();
+    console.log(`🔍 [OTP Verify] "${formattedPhone}" | store size: ${otpStore.size}`);
+    return _checkOtp(formattedPhone, inputOtp, true /* consume */);
+};
+
+/**
+ * Validates OTP WITHOUT consuming it (non-destructive peek).
+ * Use for pre-registration check only. Always follow with verifyOtp or token-based flow.
+ * @param {string} phone
+ * @param {string} otp
+ * @returns {{ ok: boolean, reason?: string, nonce?: string }}
  */
 const peekOtp = (phone, otp) => {
-    if (!phone || !otp) {
-        console.log(`❌ [OTP Peek] Missing parameter: phone="${phone}", otp="${otp}"`);
-        return false;
-    }
-
+    if (!phone || !otp) return { ok: false, reason: 'missing' };
     const formattedPhone = normalizePhone(phone);
-    const inputOtpStr = String(otp).trim();
-
-    console.log(`🔍 [OTP Peek] Checking (non-consuming) for "${formattedPhone}"`);
-
-    const storedData = otpStore.get(formattedPhone);
-    if (!storedData) {
-        console.log(`❌ [OTP Peek] No stored OTP found for "${formattedPhone}"`);
-        return false;
-    }
-
-    const now = Date.now();
-    if (now > storedData.expires) {
-        console.log(`❌ [OTP Peek] OTP expired for "${formattedPhone}".`);
-        otpStore.delete(formattedPhone);
-        return false;
-    }
-
-    const storedOtpStr = String(storedData.otp).trim();
-
-    if (storedOtpStr === inputOtpStr) {
-        console.log(`✅ [OTP Peek] OTP valid for "${formattedPhone}" (NOT consumed — still valid for final verification).`);
-        return true;
-    }
-
-    console.log(`❌ [OTP Peek] Mismatch for "${formattedPhone}": Stored="${storedOtpStr}" vs Received="${inputOtpStr}"`);
-    return false;
+    const inputOtp = String(otp).trim();
+    console.log(`🔍 [OTP Peek] "${formattedPhone}"`);
+    return _checkOtp(formattedPhone, inputOtp, false /* do not consume */);
 };
 
 /**
@@ -452,6 +504,7 @@ module.exports = {
     sendOtp,
     verifyOtp,
     peekOtp,
+    isPhoneLocked,
     sendSMSOrderAlert,
     sendWhatsAppOrderAlert,
     sendAdminNewOrderAlert,
