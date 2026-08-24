@@ -195,6 +195,7 @@ app.use((req, res, next) => {
 });
 
 // --- Cache Control Middleware ---
+app.set("trust proxy", 1); // Crucial for Vercel/proxies so rate limiters work per-IP instead of blocking everybody globally
 app.use((req, res, next) => {
   if (req.method === 'GET' && req.path.startsWith('/api')) {
     // Enable Vercel Edge Caching for catalog read routes (speed of light performance)
@@ -263,10 +264,10 @@ const otpLimiter = rateLimit({
 // ─── Input Validators ───────────────────────────────────────────────────────
 // Accepts: +91xxxxxxxxxx | 91xxxxxxxxxx | 10-digit Indian mobile | any E.164
 const PHONE_REGEX = /^(\+?91[6-9]\d{9}|[6-9]\d{9}|\+[1-9]\d{6,14})$/;
-const OTP_REGEX   = /^\d{6}$/;
+const OTP_REGEX = /^\d{6}$/;
 
 const validatePhone = (phone) => PHONE_REGEX.test(String(phone || '').trim());
-const validateOtp   = (otp)   => OTP_REGEX.test(String(otp   || '').trim());
+const validateOtp = (otp) => OTP_REGEX.test(String(otp || '').trim());
 
 // ─── OTP Error → HTTP response helper ───────────────────────────────────────
 const otpErrorResponse = (res, result) => {
@@ -291,10 +292,10 @@ const otpErrorResponse = (res, result) => {
 app.use("/api/", globalLimiter);
 app.use("/api/auth/login", authLimiter);
 // Apply strict OTP IP rate limiter to all OTP endpoints
-app.use("/api/auth/send-otp",       otpLimiter);
-app.use("/api/auth/verify-otp",     otpLimiter);
-app.use("/api/auth/verify-otp-only",otpLimiter);
-app.use("/api/auth/register-otp",   otpLimiter);
+app.use("/api/auth/send-otp", otpLimiter);
+app.use("/api/auth/verify-otp", otpLimiter);
+app.use("/api/auth/verify-otp-only", otpLimiter);
+app.use("/api/auth/register-otp", otpLimiter);
 
 // Specialized limiter for payment creation (High Risk)
 const paymentLimiter = rateLimit({
@@ -955,64 +956,74 @@ app.post("/api/auth/send-otp", async (req, res) => {
 // The frontend must present this token to /api/auth/sync when registering with a phone.
 // This closes the attack vector of calling /sync with an arbitrary phone without OTP proof.
 app.post("/api/auth/verify-otp-only", async (req, res) => {
-  const rawPhone = String(req.body.phone || '').trim();
-  const rawOtp   = String(req.body.otp   || '').trim();
-  console.log(`[POST /api/auth/verify-otp-only] IP: ${req.ip} | Phone: "${rawPhone}"`);
+  try {
+    const rawPhone = String(req.body.phone || '').trim();
+    const rawOtp = String(req.body.otp || '').trim();
+    console.log(`[POST /api/auth/verify-otp-only] IP: ${req.ip} | Phone: "${rawPhone}"`);
 
-  if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
-  if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
-  if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
+    if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
+    if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
+    if (!validateOtp(rawOtp)) return res.status(400).json({ message: "OTP must be exactly 6 digits." });
 
-  // peekOtp validates WITHOUT deleting so register-otp can still consume it
-  const result = peekOtp(rawPhone, rawOtp);
-  if (!result.ok) return otpErrorResponse(res, result);
+    // peekOtp validates WITHOUT deleting so register-otp can still consume it
+    const result = peekOtp(rawPhone, rawOtp);
+    if (!result.ok) return otpErrorResponse(res, result);
 
-  // Issue a short-lived signed preRegToken so the frontend can prove OTP was verified
-  // without being able to forge a phone number on the subsequent /sync call.
-  const preRegToken = jwt.sign(
-    { phone: normalizePhone(rawPhone), nonce: result.nonce, purpose: 'pre-register' },
-    JWT_SECRET,
-    { expiresIn: '5m' }
-  );
+    // Issue a short-lived signed preRegToken so the frontend can prove OTP was verified
+    // without being able to forge a phone number on the subsequent /sync call.
+    const preRegToken = jwt.sign(
+      { phone: normalizePhone(rawPhone), nonce: result.nonce, purpose: 'pre-register' },
+      JWT_SECRET,
+      { expiresIn: '5m' }
+    );
 
-  return res.json({ success: true, message: "OTP verified", preRegToken });
+    return res.json({ success: true, message: "OTP verified", preRegToken });
+  } catch (err) {
+    console.error("[verify-otp-only] Expected Error:", err);
+    return res.status(500).json({ message: "Server error during OTP verification." });
+  }
 });
 
 // Verify OTP & Login (CONSUMING — logs user in)
 app.post("/api/auth/verify-otp", async (req, res) => {
-  const rawPhone = String(req.body.phone || '').trim();
-  const rawOtp   = String(req.body.otp   || '').trim();
-  console.log(`[POST /api/auth/verify-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
+  try {
+    const rawPhone = String(req.body.phone || '').trim();
+    const rawOtp = String(req.body.otp || '').trim();
+    console.log(`[POST /api/auth/verify-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
 
-  if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
-  if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
-  if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
+    if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
+    if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
+    if (!validateOtp(rawOtp)) return res.status(400).json({ message: "OTP must be exactly 6 digits." });
 
-  const result = verifyOtp(rawPhone, rawOtp);
-  if (!result.ok) return otpErrorResponse(res, result);
+    const result = verifyOtp(rawPhone, rawOtp);
+    if (!result.ok) return otpErrorResponse(res, result);
 
-  const formatted = normalizePhone(rawPhone);
+    const formatted = normalizePhone(rawPhone);
 
-  const existingUser = await User.findOne({
-    $or: [
-      { phone: rawPhone },
-      { phone: formatted },
-      { phone: rawPhone.replace(/^\+91/, '') },
-      { phone: '91' + rawPhone.replace(/^\+91/, '').replace(/^91/, '') }
-    ]
-  }).lean();
+    const existingUser = await User.findOne({
+      $or: [
+        { phone: rawPhone },
+        { phone: formatted },
+        { phone: rawPhone.replace(/^\+91/, '') },
+        { phone: '91' + rawPhone.replace(/^\+91/, '').replace(/^91/, '') }
+      ]
+    }).lean();
 
-  if (!existingUser) {
-    return res.status(404).json({ message: "No account found with this phone number. Please sign up first." });
+    if (!existingUser) {
+      return res.status(404).json({ message: "No account found with this phone number. Please sign up first." });
+    }
+
+    const token = jwt.sign({
+      uid: existingUser.firebaseUid || existingUser.id || existingUser._id,
+      username: existingUser.phone || rawPhone,
+      role: "user"
+    }, JWT_SECRET, { expiresIn: "3650d" });
+
+    res.json({ success: true, token, user: existingUser });
+  } catch (err) {
+    console.error("[verify-otp] Server Error:", err);
+    return res.status(500).json({ message: "Server error during OTP verification." });
   }
-
-  const token = jwt.sign({
-    uid: existingUser.firebaseUid || existingUser.id || existingUser._id,
-    username: existingUser.phone || rawPhone,
-    role: "user"
-  }, JWT_SECRET, { expiresIn: "3650d" });
-
-  res.json({ success: true, token, user: existingUser });
 });
 
 // Standard Signup Route
@@ -1061,49 +1072,54 @@ app.post("/api/auth/signup", async (req, res) => {
 
 // Verify OTP & Register (CONSUMING — creates account)
 app.post("/api/auth/register-otp", async (req, res) => {
-  const rawPhone = String(req.body.phone || '').trim();
-  const rawOtp   = String(req.body.otp   || '').trim();
-  const { name, company, password } = req.body;
-  console.log(`[POST /api/auth/register-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
+  try {
+    const rawPhone = String(req.body.phone || '').trim();
+    const rawOtp = String(req.body.otp || '').trim();
+    const { name, company, password } = req.body;
+    console.log(`[POST /api/auth/register-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
 
-  if (!rawPhone || !rawOtp || !name) return res.status(400).json({ message: "Phone, OTP, and Name are required." });
-  if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
-  if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
+    if (!rawPhone || !rawOtp || !name) return res.status(400).json({ message: "Phone, OTP, and Name are required." });
+    if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
+    if (!validateOtp(rawOtp)) return res.status(400).json({ message: "OTP must be exactly 6 digits." });
 
-  const result = verifyOtp(rawPhone, rawOtp);
-  if (!result.ok) return otpErrorResponse(res, result);
+    const result = verifyOtp(rawPhone, rawOtp);
+    if (!result.ok) return otpErrorResponse(res, result);
 
-  const formatted = normalizePhone(rawPhone);
+    const formatted = normalizePhone(rawPhone);
 
-  const userExists = await User.findOne({
-    $or: [
-      { phone: rawPhone },
-      { phone: formatted },
-      { phone: rawPhone.replace(/^\+91/, '') },
-      { phone: '91' + rawPhone.replace(/^\+91/, '').replace(/^91/, '') }
-    ]
-  });
-  if (userExists) return res.status(400).json({ message: "This phone number is already registered. Please log in instead." });
+    const userExists = await User.findOne({
+      $or: [
+        { phone: rawPhone },
+        { phone: formatted },
+        { phone: rawPhone.replace(/^\+91/, '') },
+        { phone: '91' + rawPhone.replace(/^\+91/, '').replace(/^91/, '') }
+      ]
+    });
+    if (userExists) return res.status(400).json({ message: "This phone number is already registered. Please log in instead." });
 
-  const newUser = new User({
-    id: "u_" + Date.now(),
-    phone: formatted || rawPhone,
-    name,
-    password: password || "123456",
-    company: company || "",
-    gstNumber: req.body.gstNumber || "",
-    role: "user"
-  });
+    const newUser = new User({
+      id: "u_" + Date.now(),
+      phone: formatted || rawPhone,
+      name,
+      password: password || "123456",
+      company: company || "",
+      gstNumber: req.body.gstNumber || "",
+      role: "user"
+    });
 
-  await newUser.save();
+    await newUser.save();
 
-  const token = jwt.sign({
-    uid: newUser.firebaseUid || newUser.id || newUser._id,
-    username: newUser.phone,
-    role: "user"
-  }, JWT_SECRET, { expiresIn: "3650d" });
+    const token = jwt.sign({
+      uid: newUser.firebaseUid || newUser.id || newUser._id,
+      username: newUser.phone,
+      role: "user"
+    }, JWT_SECRET, { expiresIn: "3650d" });
 
-  res.json({ success: true, token, user: newUser });
+    res.json({ success: true, token, user: newUser });
+  } catch (err) {
+    console.error("[register-otp] Server Error:", err);
+    return res.status(500).json({ message: "Server error during registration." });
+  }
 });
 
 // Media Proxy for Protected Images

@@ -1,0 +1,1067 @@
+﻿diff --cc package-lock.json
+index 46a5bcc,764e775..0000000
+--- a/package-lock.json
++++ b/package-lock.json
+@@@ -2901,6 -2901,38 +2901,41 @@@
+          "url": "https://opencollective.com/mongoose"
+        }
+      },
+++<<<<<<< HEAD
+++=======
++     "node_modules/mongoose/node_modules/gaxios": {
++       "version": "7.3.1",
++       "resolved": "https://registry.npmjs.org/gaxios/-/gaxios-7.3.1.tgz",
++       "integrity": "sha512-kB3rzJV7d9juLZh8/56QTXCwQfxyhdOMdyYk1HdQKFtF8TJTDTZQJtixWIwXdE9Jji91mC41DUNpjleo4L4eAQ==",
++       "license": "Apache-2.0",
++       "optional": true,
++       "peer": true,
++       "dependencies": {
++         "extend": "^3.0.2",
++         "https-proxy-agent": "^7.0.1",
++         "node-fetch": "^3.3.2"
++       },
++       "engines": {
++         "node": ">=18"
++       }
++     },
++     "node_modules/mongoose/node_modules/gcp-metadata": {
++       "version": "7.0.1",
++       "resolved": "https://registry.npmjs.org/gcp-metadata/-/gcp-metadata-7.0.1.tgz",
++       "integrity": "sha512-UcO3kefx6dCcZkgcTGgVOTFb7b1LlQ02hY1omMjjrrBzkajRMCFgYOjs7J71WqnuG1k2b+9ppGL7FsOfhZMQKQ==",
++       "license": "Apache-2.0",
++       "optional": true,
++       "peer": true,
++       "dependencies": {
++         "gaxios": "^7.0.0",
++         "google-logging-utils": "^1.0.0",
++         "json-bigint": "^1.0.0"
++       },
++       "engines": {
++         "node": ">=18"
++       }
++     },
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+      "node_modules/mongoose/node_modules/mongodb": {
+        "version": "7.2.0",
+        "resolved": "https://registry.npmjs.org/mongodb/-/mongodb-7.2.0.tgz",
+@@@ -2953,6 -2985,26 +2988,29 @@@
+        "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+        "license": "MIT"
+      },
+++<<<<<<< HEAD
+++=======
++     "node_modules/mongoose/node_modules/node-fetch": {
++       "version": "3.3.2",
++       "resolved": "https://registry.npmjs.org/node-fetch/-/node-fetch-3.3.2.tgz",
++       "integrity": "sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==",
++       "license": "MIT",
++       "optional": true,
++       "peer": true,
++       "dependencies": {
++         "data-uri-to-buffer": "^4.0.0",
++         "fetch-blob": "^3.1.4",
++         "formdata-polyfill": "^4.0.10"
++       },
++       "engines": {
++         "node": "^12.20.0 || ^14.13.1 || >=16.0.0"
++       },
++       "funding": {
++         "type": "opencollective",
++         "url": "https://opencollective.com/node-fetch"
++       }
++     },
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+      "node_modules/mpath": {
+        "version": "0.9.0",
+        "resolved": "https://registry.npmjs.org/mpath/-/mpath-0.9.0.tgz",
+diff --cc server.js
+index 30ba68e,e6cb1c2..0000000
+--- a/server.js
++++ b/server.js
+@@@ -245,12 -245,56 +245,65 @@@ const globalLimiter = rateLimit(
+  
+  const authLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+++<<<<<<< HEAD
+ +  max: isProduction ? 20 : 10000, // 20 in production, 10,000 in development/testing
+ +  message: "Too many login attempts, please try again after an hour"
+ +});
+ +
+ +app.use("/api/", globalLimiter);
+ +app.use("/api/auth/login", authLimiter);
+++=======
++   max: isProduction ? 20 : 10000,
++   message: "Too many login attempts, please try again after an hour"
++ });
++ 
++ // Strict dedicated rate limiter for OTP send/verify endpoints
++ // Prevents brute-force and enumeration attacks per IP address
++ const otpLimiter = rateLimit({
++   windowMs: 15 * 60 * 1000, // 15 minutes
++   max: isProduction ? 10 : 10000, // 10 OTP actions per IP per 15 min in prod
++   message: { message: "Too many OTP requests from this IP. Please try again in 15 minutes." },
++   standardHeaders: true,
++   legacyHeaders: false,
++   skipSuccessfulRequests: false, // count every request, successful or not
++ });
++ 
++ // ΓöÇΓöÇΓöÇ Input Validators ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++ // Accepts: +91xxxxxxxxxx | 91xxxxxxxxxx | 10-digit Indian mobile | any E.164
++ const PHONE_REGEX = /^(\+?91[6-9]\d{9}|[6-9]\d{9}|\+[1-9]\d{6,14})$/;
++ const OTP_REGEX   = /^\d{6}$/;
++ 
++ const validatePhone = (phone) => PHONE_REGEX.test(String(phone || '').trim());
++ const validateOtp   = (otp)   => OTP_REGEX.test(String(otp   || '').trim());
++ 
++ // ΓöÇΓöÇΓöÇ OTP Error ΓåÆ HTTP response helper ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++ const otpErrorResponse = (res, result) => {
++   if (result.reason === 'locked') {
++     const min = Math.ceil(result.remainingSec / 60);
++     return res.status(429).json({
++       message: `Too many failed attempts. Try again in ${min} minute${min !== 1 ? 's' : ''}.`
++     });
++   }
++   if (result.reason === 'expired') {
++     return res.status(401).json({ message: "OTP has expired. Please request a new one." });
++   }
++   if (result.reason === 'mismatch') {
++     const left = result.attemptsLeft;
++     return res.status(401).json({
++       message: `Invalid OTP. ${left} attempt${left !== 1 ? 's' : ''} remaining.`
++     });
++   }
++   return res.status(401).json({ message: "Invalid or expired OTP." });
++ };
++ 
++ app.use("/api/", globalLimiter);
++ app.use("/api/auth/login", authLimiter);
++ // Apply strict OTP IP rate limiter to all OTP endpoints
++ app.use("/api/auth/send-otp",       otpLimiter);
++ app.use("/api/auth/verify-otp",     otpLimiter);
++ app.use("/api/auth/verify-otp-only",otpLimiter);
++ app.use("/api/auth/register-otp",   otpLimiter);
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+  
+  // Specialized limiter for payment creation (High Risk)
+  const paymentLimiter = rateLimit({
+@@@ -388,7 -432,7 +441,11 @@@ app.use("/api/shipping", shippingRoutes
+  app.use("/api/user", auth, userRoutes);
+  app.use("/api/admin", auth, adminRoutes);
+  const multer = require("multer");
+++<<<<<<< HEAD
+ +const { sendOtp, verifyOtp, sendSMSOrderAlert, sendWhatsAppOrderAlert, sendAdminNewOrderAlert, sendPromotionalSMS, sendPromotionalWhatsApp } = require("./twiloapi");
+++=======
++ const { sendOtp, verifyOtp, peekOtp, isPhoneLocked, normalizePhone, sendSMSOrderAlert, sendWhatsAppOrderAlert, sendAdminNewOrderAlert, sendPromotionalSMS, sendPromotionalWhatsApp } = require("./twiloapi");
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+  
+  const storage = multer.memoryStorage();
+  const upload = multer({
+@@@ -682,13 -726,48 +739,56 @@@ app.get("/api/auth/profile", auth, asyn
+  // Sync Firebase User with MongoDB
+  app.post("/api/auth/sync", auth, async (req, res) => {
+    const { name, company, gstNumber } = req.body;
+++<<<<<<< HEAD
+ +  const phone = (req.body.phone && req.body.phone.trim()) ? req.body.phone.trim() : undefined;
+ +  console.log(`[SYNC] Attempting sync for UID: ${req.user.uid}, Email: ${req.user.email}`);
+++=======
++   const rawPhone = (req.body.phone && req.body.phone.trim()) ? req.body.phone.trim() : undefined;
++   const preRegToken = req.body.preRegToken || req.headers['x-pre-reg-token'] || null;
++   console.log(`[SYNC] Attempting sync for UID: ${req.user.uid}, Email: ${req.user.email}, Phone provided: ${!!rawPhone}`);
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+  
+    if (!req.user || !req.user.uid) {
+      return res.status(401).json({ message: "Invalid user session" });
+    }
+  
+++<<<<<<< HEAD
+++=======
++   // If a phone number is included, validate the preRegToken to prove OTP was verified.
++   // This prevents Burp Suite / API tampering where an attacker sends an arbitrary phone
++   // without actually completing OTP verification.
++   let verifiedPhone = undefined;
++   if (rawPhone) {
++     if (!preRegToken) {
++       console.warn(`[SYNC] Phone provided without preRegToken for UID: ${req.user.uid}. Ignoring phone.`);
++       // Don't block the sync ΓÇö just ignore the phone (graceful degradation)
++       verifiedPhone = undefined;
++     } else {
++       try {
++         const decoded = jwt.verify(preRegToken, JWT_SECRET);
++         if (decoded.purpose !== 'pre-register') {
++           throw new Error('Invalid token purpose');
++         }
++         // Ensure the phone in the token matches the phone in the request
++         const tokenPhone = decoded.phone;
++         const requestPhone = normalizePhone(rawPhone);
++         if (tokenPhone !== requestPhone) {
++           console.warn(`[SYNC] preRegToken phone mismatch: token="${tokenPhone}" vs request="${requestPhone}"`);
++           throw new Error('Phone number mismatch');
++         }
++         verifiedPhone = requestPhone; // Trust only the phone from the verified token
++         console.log(`[SYNC] preRegToken valid for phone: ${verifiedPhone}`);
++       } catch (err) {
++         console.warn(`[SYNC] Invalid or expired preRegToken: ${err.message}`);
++         return res.status(401).json({ message: "Phone OTP verification has expired or is invalid. Please verify your phone number again." });
++       }
++     }
++   }
++ 
++   // Use the OTP-verified phone, or undefined if not verified
++   const phone = verifiedPhone;
++ 
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+    try {
+      // 1. Check if user exists in Employee collection (Admins/Staff)
+      let user = await Employee.findOne({ firebaseUid: req.user.uid });
+@@@ -850,54 -929,90 +950,137 @@@ const employeeOrAdmin = async (req, res
+  
+  // Send OTP
+  app.post("/api/auth/send-otp", async (req, res) => {
+++<<<<<<< HEAD
+ +  const { phone } = req.body;
+ +  console.log(`OTP Request for: ${phone}`);
+ +  if (!phone) return res.status(400).json({ message: "Phone number is required" });
+ +
+ +  try {
+ +    const result = await sendOtp(phone);
+ +    res.json(result);
+ +  } catch (error) {
+ +    console.error("Route OTP Error:", error.message);
+++=======
++   const rawPhone = String(req.body.phone || '').trim();
++   console.log(`[POST /api/auth/send-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
++ 
++   if (!rawPhone) return res.status(400).json({ message: "Phone number is required." });
++   if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
++ 
++   // Check lockout before even generating a new OTP
++   const lockStatus = isPhoneLocked(rawPhone);
++   if (lockStatus && lockStatus.locked) {
++     const min = Math.ceil(lockStatus.remainingSec / 60);
++     return res.status(429).json({ message: `Account temporarily locked due to failed attempts. Try again in ${min} minute${min !== 1 ? 's' : ''}.` });
++   }
++ 
++   try {
++     const result = await sendOtp(rawPhone);
++     res.json(result);
++   } catch (error) {
++     console.error("[send-otp] Error:", error.message);
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+      res.status(400).json({ message: error.message });
+    }
+  });
+  
+++<<<<<<< HEAD
+ +app.post("/api/auth/verify-otp-only", async (req, res) => {
+ +  const { phone, otp } = req.body;
+ +  if (!phone || !otp) return res.status(400).json({ message: "Phone and OTP are required" });
+ +
+ +  const isValid = verifyOtp(phone, otp);
+ +  if (!isValid) return res.status(401).json({ message: "Invalid or expired OTP" });
+ +
+ +  return res.json({ success: true, message: "OTP verified" });
+ +});
+ +
+ +// Verify OTP & Login
+ +app.post("/api/auth/verify-otp", async (req, res) => {
+ +  const { phone, otp } = req.body;
+ +  if (!phone || !otp) return res.status(400).json({ message: "Phone and OTP are required" });
+ +
+ +  const isValid = verifyOtp(phone, otp);
+ +  if (!isValid) return res.status(401).json({ message: "Invalid or expired OTP" });
+ +
+ +  // Generate token for the user
+ +  const existingUser = await User.findOne({ phone }).lean();
+++=======
++ // Verify OTP only (NON-CONSUMING) ΓÇö issues a short-lived signed preRegToken.
++ // The frontend must present this token to /api/auth/sync when registering with a phone.
++ // This closes the attack vector of calling /sync with an arbitrary phone without OTP proof.
++ app.post("/api/auth/verify-otp-only", async (req, res) => {
++   const rawPhone = String(req.body.phone || '').trim();
++   const rawOtp   = String(req.body.otp   || '').trim();
++   console.log(`[POST /api/auth/verify-otp-only] IP: ${req.ip} | Phone: "${rawPhone}"`);
++ 
++   if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
++   if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
++   if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
++ 
++   // peekOtp validates WITHOUT deleting so register-otp can still consume it
++   const result = peekOtp(rawPhone, rawOtp);
++   if (!result.ok) return otpErrorResponse(res, result);
++ 
++   // Issue a short-lived signed preRegToken so the frontend can prove OTP was verified
++   // without being able to forge a phone number on the subsequent /sync call.
++   const preRegToken = jwt.sign(
++     { phone: normalizePhone(rawPhone), nonce: result.nonce, purpose: 'pre-register' },
++     JWT_SECRET,
++     { expiresIn: '5m' }
++   );
++ 
++   return res.json({ success: true, message: "OTP verified", preRegToken });
++ });
++ 
++ // Verify OTP & Login (CONSUMING ΓÇö logs user in)
++ app.post("/api/auth/verify-otp", async (req, res) => {
++   const rawPhone = String(req.body.phone || '').trim();
++   const rawOtp   = String(req.body.otp   || '').trim();
++   console.log(`[POST /api/auth/verify-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
++ 
++   if (!rawPhone || !rawOtp) return res.status(400).json({ message: "Phone and OTP are required." });
++   if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
++   if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
++ 
++   const result = verifyOtp(rawPhone, rawOtp);
++   if (!result.ok) return otpErrorResponse(res, result);
++ 
++   const formatted = normalizePhone(rawPhone);
++ 
++   const existingUser = await User.findOne({
++     $or: [
++       { phone: rawPhone },
++       { phone: formatted },
++       { phone: rawPhone.replace(/^\+91/, '') },
++       { phone: '91' + rawPhone.replace(/^\+91/, '').replace(/^91/, '') }
++     ]
++   }).lean();
++ 
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+    if (!existingUser) {
+      return res.status(404).json({ message: "No account found with this phone number. Please sign up first." });
+    }
+  
+    const token = jwt.sign({
+      uid: existingUser.firebaseUid || existingUser.id || existingUser._id,
+++<<<<<<< HEAD
+ +    username: phone,
+ +    role: "user"
+ +  }, JWT_SECRET, { expiresIn: "3650d" });
+ +
+ +  res.json({
+ +    success: true,
+ +    token,
+ +    user: existingUser
+ +  });
+++=======
++     username: existingUser.phone || rawPhone,
++     role: "user"
++   }, JWT_SECRET, { expiresIn: "3650d" });
++ 
++   res.json({ success: true, token, user: existingUser });
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+  });
+  
+  // Standard Signup Route
+@@@ -944,26 -1059,37 +1127,60 @@@ app.post("/api/auth/signup", async (req
+    }
+  });
+  
+++<<<<<<< HEAD
+ +// Verify OTP & Register (Updated with password support)
+ +app.post("/api/auth/register-otp", async (req, res) => {
+ +  const { phone, otp, name, company, password } = req.body;
+ +  if (!phone || !otp || !name) {
+ +    return res.status(400).json({ message: "Phone, OTP, and Name are required" });
+ +  }
+ +
+ +  const isValid = verifyOtp(phone, otp);
+ +  if (!isValid) return res.status(401).json({ message: "Invalid or expired OTP" });
+ +
+ +  const userExists = await User.findOne({ phone });
+ +  if (userExists) {
+ +    return res.status(400).json({ message: "This phone number already exists." });
+ +  }
+ +
+ +  const newUser = new User({
+ +    id: "u_" + Date.now(),
+ +    phone,
+ +    name,
+ +    password: password || "123456", // default password if not provided during OTP
+++=======
++ // Verify OTP & Register (CONSUMING ΓÇö creates account)
++ app.post("/api/auth/register-otp", async (req, res) => {
++   const rawPhone = String(req.body.phone || '').trim();
++   const rawOtp   = String(req.body.otp   || '').trim();
++   const { name, company, password } = req.body;
++   console.log(`[POST /api/auth/register-otp] IP: ${req.ip} | Phone: "${rawPhone}"`);
++ 
++   if (!rawPhone || !rawOtp || !name) return res.status(400).json({ message: "Phone, OTP, and Name are required." });
++   if (!validatePhone(rawPhone)) return res.status(400).json({ message: "Invalid phone number format." });
++   if (!validateOtp(rawOtp))     return res.status(400).json({ message: "OTP must be exactly 6 digits." });
++ 
++   const result = verifyOtp(rawPhone, rawOtp);
++   if (!result.ok) return otpErrorResponse(res, result);
++ 
++   const formatted = normalizePhone(rawPhone);
++ 
++   const userExists = await User.findOne({
++     $or: [
++       { phone: rawPhone },
++       { phone: formatted },
++       { phone: rawPhone.replace(/^\+91/, '') },
++       { phone: '91' + rawPhone.replace(/^\+91/, '').replace(/^91/, '') }
++     ]
++   });
++   if (userExists) return res.status(400).json({ message: "This phone number is already registered. Please log in instead." });
++ 
++   const newUser = new User({
++     id: "u_" + Date.now(),
++     phone: formatted || rawPhone,
++     name,
++     password: password || "123456",
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+      company: company || "",
+      gstNumber: req.body.gstNumber || "",
+      role: "user"
+@@@ -973,7 -1099,7 +1190,11 @@@
+  
+    const token = jwt.sign({
+      uid: newUser.firebaseUid || newUser.id || newUser._id,
+++<<<<<<< HEAD
+ +    username: phone,
+++=======
++     username: newUser.phone,
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+      role: "user"
+    }, JWT_SECRET, { expiresIn: "3650d" });
+  
+diff --cc services/cacheService.js
+index 1d7e399,fa8e0de..0000000
+--- a/services/cacheService.js
++++ b/services/cacheService.js
+@@@ -1,32 -1,32 +1,67 @@@
+++<<<<<<< HEAD
+ +const NodeCache = require('node-cache');
+ +
+ +// Standard TTL of 1 hour, check for expired keys every 2 minutes
+ +const myCache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
+ +
+ +const cacheService = {
+ +    get: (key) => myCache.get(key),
+ +
+ +    set: (key, value, ttl = 3600) => myCache.set(key, value, ttl),
+ +
+ +    del: (keys) => myCache.del(keys),
+ +
+ +    flush: () => myCache.flushAll(),
+ +
+ +    /**
+ +     * Invalidates all product-related caches.
+ +     * Call this when a product is created, updated, or deleted.
+ +     */
+ +    invalidateProductsCache: () => {
+ +        const keys = myCache.keys();
+ +        const productKeys = keys.filter(k =>
+ +            k.startsWith('prod_') ||
+ +            k.startsWith('meta_') ||
+ +            k.startsWith('search_') ||
+ +            k.startsWith('paginated_')
+ +        );
+ +        myCache.del(productKeys);
+ +        console.log(`[CACHE] Invalidated ${productKeys.length} product-related keys.`);
+ +    }
+ +};
+ +
+ +module.exports = cacheService;
+++=======
++ const NodeCache = require('node-cache');
++ 
++ // Standard TTL of 1 hour, check for expired keys every 2 minutes
++ const myCache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
++ 
++ const cacheService = {
++     get: (key) => myCache.get(key),
++ 
++     set: (key, value, ttl = 3600) => myCache.set(key, value, ttl),
++ 
++     del: (keys) => myCache.del(keys),
++ 
++     flush: () => myCache.flushAll(),
++ 
++     /**
++      * Invalidates all product-related caches.
++      * Call this when a product is created, updated, or deleted.
++      */
++     invalidateProductsCache: () => {
++         const keys = myCache.keys();
++         const productKeys = keys.filter(k =>
++             k.startsWith('prod_') ||
++             k.startsWith('meta_') ||
++             k.startsWith('search_') ||
++             k.startsWith('paginated_')
++         );
++         myCache.del(productKeys);
++         console.log(`[CACHE] Invalidated ${productKeys.length} product-related keys.`);
++     }
++ };
++ 
++ module.exports = cacheService;
+++>>>>>>> c74f8a1db78e0a65f8ee5849289502169a188cbe
+diff --cc twiloapi.js
+index 7ea5aa0,df28776..0000000
+--- a/twiloapi.js
++++ b/twiloapi.js
+@@@ -1,383 -1,513 +1,0 @@@
+--const twilio = require('twilio');
+--
+--// Load environment variables
+--const accountSid = process.env.TWILIO_ACCOUNT_SID;
+--const authToken = process.env.TWILIO_AUTH_TOKEN;
+--const apiKeySid = process.env.TWILIO_API_KEY_SID;
+--const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+--
+--console.log("Twilio Config Loaded:", {
+--    accountSid: !!accountSid,
+--    authToken: !!authToken,
+--    apiKeySid: !!apiKeySid,
+--    phone: !!twilioPhoneNumber
+--});
+--
+--if (!accountSid || !authToken || !twilioPhoneNumber) {
+--    console.warn("ΓÜá∩╕Å [Twilio Warning] One or more crucial Twilio environment variables are missing! SMS services will fail.");
+--} else {
+--    console.log("Γ£à [Twilio] Configuration loaded successfully.");
+--}
+--
+--// Check if Twilio is properly configured (not using placeholders or empty values)
+--const isTwilioConfigured = !(
+--    !accountSid ||
+--    !authToken ||
+--    accountSid.includes('xxx') ||
+--    accountSid.includes('your_') ||
+--    authToken.includes('xxx') ||
+--    authToken.includes('your_') ||
+--    !twilioPhoneNumber ||
+--    twilioPhoneNumber.includes('xxx') ||
+--    twilioPhoneNumber.includes('your_')
+--);
+--
+--// Initialize Twilio Client only if configured
+--let client;
+--if (isTwilioConfigured) {
+--    if (apiKeySid && apiKeySid.startsWith('SK')) {
+--        console.log("Using Twilio API Key authentication...");
+--        client = twilio(apiKeySid, authToken, { accountSid: accountSid });
+--    } else {
+--        console.log("Using Twilio Account SID/Auth Token authentication...");
+--        client = twilio(accountSid, authToken);
+--    }
+--} else {
+--    console.warn("ΓÜá∩╕Å [Twilio Warning] Running in offline/development mode. SMS messages will be logged to the console.");
+--}
+--
+- // In-memory OTP storage (phone ΓåÆ { otp, expires, lastSent })
+ -// Security constants
+ -const MAX_OTP_ATTEMPTS  = 5;          // max wrong guesses before lockout
+ -const LOCKOUT_DURATION  = 15 * 60 * 1000; // 15 minutes in ms
+ -const OTP_TTL           = 5  * 60 * 1000; // 5 minutes in ms
+ -const RESEND_COOLDOWN   = 30 * 1000;      // 30 seconds between resends
+ -
+ -// In-memory OTP storage
+ -// phone ΓåÆ { otp, expires, lastSent, nonce, attempts, lockedUntil }
+--const otpStore = new Map();
+--
+- // Periodic background cleanup of expired OTPs to prevent memory leaks (every 10 minutes)
+ -/**
+ - * Constant-time string comparison to prevent timing-based side-channel attacks.
+ - */
+ -const safeEqual = (a, b) => {
+ -    const sa = String(a);
+ -    const sb = String(b);
+ -    if (sa.length !== sb.length) return false;
+ -    let diff = 0;
+ -    for (let i = 0; i < sa.length; i++) {
+ -        diff |= sa.charCodeAt(i) ^ sb.charCodeAt(i);
+ -    }
+ -    return diff === 0;
+ -};
+ -
+ -// Periodic background cleanup (every 10 minutes)
+--setInterval(() => {
+--    const now = Date.now();
+--    let cleaned = 0;
+--    for (const [phone, data] of otpStore.entries()) {
+-         if (now > data.expires) {
+ -        // Keep locked entries until lockout expires, remove expired+unlocked entries
+ -        const lockExpired  = !data.lockedUntil || now > data.lockedUntil;
+ -        const otpExpired   = now > data.expires;
+ -        if (otpExpired && lockExpired) {
+--            otpStore.delete(phone);
+--            cleaned++;
+--        }
+--    }
+--    if (cleaned > 0) {
+-         console.log(`≡ƒº╣ [Twilio OTP Garbage Collector] Cleaned up ${cleaned} expired OTP entries from memory.`);
+ -        console.log(`≡ƒº╣ [OTP GC] Cleaned up ${cleaned} expired OTP entries.`);
+--    }
+- }, 10 * 60 * 1000).unref(); // Use unref() so the interval does not keep the Node process alive in scripts/tests
+ -}, 10 * 60 * 1000).unref();
+ -
+ -/**
+ - * Returns true if the phone is currently locked out due to too many failed attempts.
+ - * @param {string} phone  raw or E.164 phone
+ - */
+ -const isPhoneLocked = (phone) => {
+ -    const formattedPhone = normalizePhone ? normalizePhone(phone) : phone;
+ -    const entry = otpStore.get(formattedPhone);
+ -    if (!entry || !entry.lockedUntil) return false;
+ -    if (Date.now() < entry.lockedUntil) {
+ -        const remainingSec = Math.ceil((entry.lockedUntil - Date.now()) / 1000);
+ -        console.log(`≡ƒöÆ [OTP Lock] ${formattedPhone} is locked for ${remainingSec}s more.`);
+ -        return { locked: true, remainingSec };
+ -    }
+ -    // Lockout expired ΓÇö clear it
+ -    otpStore.delete(formattedPhone);
+ -    return false;
+ -};
+ -
+ -/**
+ - * Normalizes phone numbers to standard format E.164 (+919876543210)
+ - * Handles raw inputs like: "9876543210", "+919876543210", "919876543210", "+91 98765 43210", " 9876543210 "
+ - */
+ -const normalizePhone = (phone) => {
+ -    if (!phone) return "";
+ -    let cleaned = String(phone).trim().replace(/[^\d+]/g, '');
+ -    if (/^[6-9]\d{9}$/.test(cleaned)) {
+ -        cleaned = `+91${cleaned}`;
+ -    } else if (/^91[6-9]\d{9}$/.test(cleaned)) {
+ -        cleaned = `+${cleaned}`;
+ -    } else if (!cleaned.startsWith('+') && cleaned.length >= 10) {
+ -        cleaned = `+${cleaned}`;
+ -    }
+ -    return cleaned;
+ -};
+ -
+--
+--/**
+-- * Sends a 6-digit OTP via SMS
+-- * @param {string} phone  E.164 format, e.g. +919888109761
+-- * @returns {Promise<object>}
+-- */
+--const sendOtp = async (phone) => {
+--    if (!phone) throw new Error('Phone number is required');
+--
+-     // Auto-format 10-digit Indian phone numbers to E.164 if they don't have country code
+-     let formattedPhone = phone.trim();
+-     if (/^[6-9]\d{9}$/.test(formattedPhone)) {
+-         formattedPhone = `+91${formattedPhone}`;
+-     }
+ -    const formattedPhone = normalizePhone(phone);
+ -    if (!formattedPhone) throw new Error('Invalid phone number format');
+--
+-     // Rate-limit: 10 minutes between requests per number
+ -    const now  = Date.now();
+--    const existing = otpStore.get(formattedPhone);
+-     const now = Date.now();
+-     if (existing && (now - existing.lastSent < 600000)) {
+-         const remainingMinutes = Math.ceil((600000 - (now - existing.lastSent)) / 60000);
+-         throw new Error(`Please wait ${remainingMinutes} minutes before requesting a new OTP.`);
+ -
+ -    // Reject if phone is currently locked out
+ -    if (existing && existing.lockedUntil && now < existing.lockedUntil) {
+ -        const remainingSec = Math.ceil((existing.lockedUntil - now) / 1000);
+ -        throw new Error(`Too many failed attempts. Please try again in ${remainingSec} seconds.`);
+--    }
+--
+-     const otp = Math.floor(100000 + Math.random() * 900000).toString();
+-     const expiry = now + (15 * 60 * 1000); // 15 minutes
+ -    // Rate-limit: enforce RESEND_COOLDOWN between send requests
+ -    if (existing && (now - existing.lastSent < RESEND_COOLDOWN)) {
+ -        const remainingSec = Math.ceil((RESEND_COOLDOWN - (now - existing.lastSent)) / 1000);
+ -        throw new Error(`Please wait ${remainingSec} seconds before requesting a new OTP.`);
+ -    }
+--
+-     // Store OTP in memory first
+-     otpStore.set(formattedPhone, { otp, expires: expiry, lastSent: now });
+ -    const otp   = Math.floor(100000 + Math.random() * 900000).toString();
+ -    const nonce = require('crypto').randomBytes(16).toString('hex'); // unique per OTP for anti-replay
+ -    const expiry = now + OTP_TTL;
+ -
+ -    // Store entry ΓÇö reset attempts on new OTP request
+ -    otpStore.set(formattedPhone, {
+ -        otp:          String(otp).trim(),
+ -        nonce,
+ -        expires:      expiry,
+ -        lastSent:     now,
+ -        attempts:     0,
+ -        lockedUntil:  null
+ -    });
+ -
+ -    console.log(`≡ƒöæ [OTP] Generated for ${formattedPhone} (expires ${new Date(expiry).toISOString()}, nonce: ${nonce.slice(0,8)}...)`);
+--
+--    if (!isTwilioConfigured) {
+-         if (process.env.NODE_ENV !== "production") {
+-             console.log(`\n==================================================`);
+-             console.log(`[Twilio Dev Fallback] OTP for ${formattedPhone} is: ${otp}`);
+-             console.log(`==================================================\n`);
+-             return { success: true, messageId: "dev-fallback-sid", isDevFallback: true };
+-         } else {
+-             throw new Error("Twilio credentials are not configured properly in the server. Please check the .env file.");
+-         }
+ -        console.log(`\n==================================================`);
+ -        console.log(`[Twilio Dev Fallback] OTP for ${formattedPhone} is: ${otp}`);
+ -        console.log(`==================================================\n`);
+ -        return { success: true, messageId: 'dev-fallback-sid', isDevFallback: true, devOtp: otp };
+--    }
+--
+--    try {
+--        const message = await client.messages.create({
+-             body: `Your Fine Bearing OTP is: ${otp}\nValid for 15 minutes. Do not share this code.`,
+ -            body: `Your Fine Bearing OTP is: ${otp}\nValid for 5 minutes. Do not share this code.`,
+--            from: twilioPhoneNumber,
+-             to: formattedPhone
+ -            to:   formattedPhone
+--        });
+- 
+-         console.log(`OTP sent via SMS to ${formattedPhone} | SID: ${message.sid}`);
+ -        console.log(`Γ£à [OTP] SMS sent to ${formattedPhone} | SID: ${message.sid}`);
+--        return { success: true, messageId: message.sid };
+- 
+--    } catch (error) {
+-         console.error('Twilio SMS Error:', error.code, error.message);
+ -        // Roll back the stored OTP so the user can retry immediately
+ -        otpStore.delete(formattedPhone);
+ -        console.error('Γ¥î [Twilio] SMS Error:', error.code, error.message);
+--        throw new Error(`Failed to send SMS: ${error.message}`);
+--    }
+--};
+--
+--/**
+-  * Verifies the OTP for a given phone number
+-  * @param {string} phone
+-  * @param {string} otp
+-  * @returns {boolean}
+ - * Internal helper ΓÇö runs attempt tracking and lockout logic.
+ - * Returns { ok: true, nonce } on match, or { ok: false, reason } on failure.
+ - * @param {string} formattedPhone  Already-normalized E.164 phone
+ - * @param {string} inputOtp        Trimmed OTP string
+ - * @param {boolean} consume        If true, delete the entry on success (one-time use)
+-- */
+- const verifyOtp = (phone, otp) => {
+-     if (!phone || !otp) return false;
+ -const _checkOtp = (formattedPhone, inputOtp, consume) => {
+ -    const storedData = otpStore.get(formattedPhone);
+--
+-     // Auto-format 10-digit Indian phone numbers to E.164 if they don't have country code
+-     let formattedPhone = phone.trim();
+-     if (/^[6-9]\d{9}$/.test(formattedPhone)) {
+-         formattedPhone = `+91${formattedPhone}`;
+ -    if (!storedData) {
+ -        console.log(`Γ¥î [OTP] No entry for "${formattedPhone}"`);
+ -        return { ok: false, reason: 'not_found' };
+--    }
+- 
+-     const storedData = otpStore.get(formattedPhone);
+-     if (!storedData) return false;
+--
+--    const now = Date.now();
+ -
+ -    // Check lockout
+ -    if (storedData.lockedUntil && now < storedData.lockedUntil) {
+ -        const sec = Math.ceil((storedData.lockedUntil - now) / 1000);
+ -        console.log(`≡ƒöÆ [OTP] "${formattedPhone}" is locked for ${sec}s more.`);
+ -        return { ok: false, reason: 'locked', remainingSec: sec };
+ -    }
+ -
+ -    // Check expiry
+--    if (now > storedData.expires) {
+ -        console.log(`Γ¥î [OTP] Expired for "${formattedPhone}".`);
+--        otpStore.delete(formattedPhone);
+-         return false;
+ -        return { ok: false, reason: 'expired' };
+--    }
+--
+-     if (storedData.otp === otp.trim()) {
+-         otpStore.delete(formattedPhone); // one-time use
+-         return true;
+ -    const storedOtp = String(storedData.otp).trim();
+ -
+ -    // Constant-time comparison to prevent timing attacks
+ -    if (safeEqual(storedOtp, inputOtp)) {
+ -        const nonce = storedData.nonce;
+ -        if (consume) {
+ -            otpStore.delete(formattedPhone);
+ -            console.log(`Γ£à [OTP] Matched & consumed for "${formattedPhone}".`);
+ -        } else {
+ -            console.log(`Γ£à [OTP] Matched (peek, not consumed) for "${formattedPhone}".`);
+ -        }
+ -        return { ok: true, nonce };
+--    }
+--
+-     return false;
+ -    // Wrong OTP ΓÇö increment attempt counter
+ -    storedData.attempts = (storedData.attempts || 0) + 1;
+ -    const attemptsLeft = MAX_OTP_ATTEMPTS - storedData.attempts;
+ -    console.log(`Γ¥î [OTP] Wrong OTP for "${formattedPhone}". Attempts: ${storedData.attempts}/${MAX_OTP_ATTEMPTS}`);
+ -
+ -    if (storedData.attempts >= MAX_OTP_ATTEMPTS) {
+ -        storedData.lockedUntil = now + LOCKOUT_DURATION;
+ -        const lockMin = Math.ceil(LOCKOUT_DURATION / 60000);
+ -        console.log(`≡ƒöÆ [OTP] "${formattedPhone}" locked for ${lockMin} minutes after ${MAX_OTP_ATTEMPTS} failed attempts.`);
+ -        return { ok: false, reason: 'locked', remainingSec: Math.ceil(LOCKOUT_DURATION / 1000) };
+ -    }
+ -
+ -    return { ok: false, reason: 'mismatch', attemptsLeft };
+ -};
+ -
+ -/**
+ - * Verifies OTP and CONSUMES it (one-time use). Use for login/register.
+ - * @param {string} phone
+ - * @param {string} otp
+ - * @returns {{ ok: boolean, reason?: string, nonce?: string }}
+ - */
+ -const verifyOtp = (phone, otp) => {
+ -    if (!phone || !otp) return { ok: false, reason: 'missing' };
+ -    const formattedPhone = normalizePhone(phone);
+ -    const inputOtp = String(otp).trim();
+ -    console.log(`≡ƒöì [OTP Verify] "${formattedPhone}" | store size: ${otpStore.size}`);
+ -    return _checkOtp(formattedPhone, inputOtp, true /* consume */);
+ -};
+ -
+ -/**
+ - * Validates OTP WITHOUT consuming it (non-destructive peek).
+ - * Use for pre-registration check only. Always follow with verifyOtp or token-based flow.
+ - * @param {string} phone
+ - * @param {string} otp
+ - * @returns {{ ok: boolean, reason?: string, nonce?: string }}
+ - */
+ -const peekOtp = (phone, otp) => {
+ -    if (!phone || !otp) return { ok: false, reason: 'missing' };
+ -    const formattedPhone = normalizePhone(phone);
+ -    const inputOtp = String(otp).trim();
+ -    console.log(`≡ƒöì [OTP Peek] "${formattedPhone}"`);
+ -    return _checkOtp(formattedPhone, inputOtp, false /* do not consume */);
+--};
+--
+--/**
+-- * Sends an order status SMS alert to a customer
+-- * @param {string} phone   E.164 format
+-- * @param {string} orderId
+-- * @param {string} status
+-- */
+--const sendSMSOrderAlert = async (phone, orderId, status) => {
+--    if (!phone || !orderId || !status) {
+--        throw new Error('Missing parameters for SMS alert');
+--    }
+--
+--    // Auto-format 10-digit Indian phone numbers to E.164 if they don't have country code
+--    let formattedPhone = phone.trim();
+--    if (/^[6-9]\d{9}$/.test(formattedPhone)) {
+--        formattedPhone = `+91${formattedPhone}`;
+--    }
+--
+--    const s = status.toLowerCase();
+--    const messageTemplates = {
+--        confirmed: `Γ£à Order Confirmed!\nOrder #${orderId} has been confirmed by Fine Bearing. We'll notify you when it's packed.`,
+--        packed: `≡ƒôª Order Packed!\nOrder #${orderId} is packed and ready for dispatch.`,
+--        dispatched: `≡ƒÜÜ Order Dispatched!\nOrder #${orderId} is on its way. Expect delivery updates soon.`,
+--        out_for_delivery: `≡ƒ¢╡ Out for Delivery!\nOrder #${orderId} is out for delivery. Please be available.`,
+--        delivered: `Γ£à Delivered!\nOrder #${orderId} has been delivered. Thank you for shopping with Fine Bearing!`,
+--        cancelled: `Γ¥î Order Cancelled\nOrder #${orderId} has been cancelled. Contact us for support.`,
+--    };
+--
+--    const body = messageTemplates[s] ||
+--        `≡ƒôï Order Update\nOrder #${orderId} status: ${status}. - Fine Bearing`;
+--
+--    if (!isTwilioConfigured) {
+--        console.log(`\n==================================================`);
+--        console.log(`[Twilio Dev Fallback] SMS Order Alert to ${formattedPhone}:`);
+--        console.log(body);
+--        console.log(`==================================================\n`);
+--        return { success: true, messageId: "dev-fallback-alert-sid" };
+--    }
+--
+--    try {
+--        const message = await client.messages.create({
+--            body,
+--            from: twilioPhoneNumber,
+--            to: formattedPhone
+--        });
+--        console.log(`SMS order alert sent to ${formattedPhone} | SID: ${message.sid}`);
+--        return { success: true, messageId: message.sid };
+--    } catch (error) {
+--        console.error('Twilio SMS Alert Error:', error.code, error.message);
+--        // Don't throw ΓÇö order should still process even if SMS fails
+--        return { success: false, error: error.message };
+--    }
+--};
+--
+--/**
+-- * Sends an order status WhatsApp alert to a customer
+-- * @param {string} phone   E.164 format
+-- * @param {string} orderId
+-- * @param {string} status
+-- */
+--const sendWhatsAppOrderAlert = async (phone, orderId, status) => {
+--    if (!phone || !orderId || !status) {
+--        throw new Error('Missing parameters for WhatsApp alert');
+--    }
+--
+--    // Auto-format 10-digit Indian phone numbers to E.164 if they don't have country code
+--    let formattedPhone = phone.trim();
+--    if (/^[6-9]\d{9}$/.test(formattedPhone)) {
+--        formattedPhone = `+91${formattedPhone}`;
+--    }
+--
+--    const s = status.toLowerCase();
+--    const messageTemplates = {
+--        confirmed: `Γ£à *Order Confirmed!*\n\nOrder *#${orderId}* has been confirmed by *Fine Bearing*. We will notify you when it's packed. Thank you for shopping with us!`,
+--        packed: `≡ƒôª *Order Packed!*\n\nOrder *#${orderId}* is packed and ready for dispatch.`,
+--        dispatched: `≡ƒÜÜ *Order Dispatched!*\n\nOrder *#${orderId}* is on its way. Expect delivery updates soon.`,
+--        out_for_delivery: `≡ƒ¢╡ *Out for Delivery!*\n\nOrder *#${orderId}* is out for delivery. Please be available to receive it.`,
+--        delivered: `Γ£à *Delivered!*\n\nOrder *#${orderId}* has been successfully delivered. Thank you for shopping with *Fine Bearing*!`,
+--        cancelled: `Γ¥î *Order Cancelled*\n\nOrder *#${orderId}* has been cancelled. Please contact our support if you have any questions.`,
+--    };
+--
+--    const body = messageTemplates[s] ||
+--        `≡ƒôï *Order Update*\n\nOrder *#${orderId}* status: *${status}*. - *Fine Bearing*`;
+--
+--    if (!isTwilioConfigured) {
+--        console.log(`\n==================================================`);
+--        console.log(`[Twilio Dev Fallback] WhatsApp Order Alert to whatsapp:${formattedPhone}:`);
+--        console.log(body);
+--        console.log(`==================================================\n`);
+--        return { success: true, messageId: "dev-fallback-whatsapp-sid" };
+--    }
+--
+--    const twilioWhatsAppNumber = process.env.TWILIO_WHATSAPP_NUMBER || "+14155238886";
+--    let whatsappSender = twilioWhatsAppNumber.trim();
+--    if (!whatsappSender.startsWith("whatsapp:")) {
+--        whatsappSender = `whatsapp:${whatsappSender}`;
+--    }
+--
+--    try {
+--        const message = await client.messages.create({
+--            body,
+--            from: whatsappSender,
+--            to: `whatsapp:${formattedPhone}`
+--        });
+--        console.log(`WhatsApp order alert sent to ${formattedPhone} | SID: ${message.sid}`);
+--        return { success: true, messageId: message.sid };
+--    } catch (error) {
+--        console.error('Twilio WhatsApp Alert Error:', error.code, error.message);
+--        // Don't throw ΓÇö order should still process even if WhatsApp fails
+--        return { success: false, error: error.message };
+--    }
+--};
+--
+--/**
+-- * Notifies admin/staff about a new order
+-- * @param {object} order  Full order object
+-- */
+--const sendAdminNewOrderAlert = async (order) => {
+--    // Get list of admin/staff numbers from .env (comma separated)
+--    const numbersStr = process.env.ADMIN_NOTIFICATION_PHONES || process.env.ADMIN_PHONE || "";
+--    const numbers = numbersStr.split(',').map(n => n.trim()).filter(n => n.length > 5);
+--
+--    if (numbers.length === 0) {
+--        console.log("No ADMIN_NOTIFICATION_PHONES found in .env, skipping admin SMS.");
+--        return;
+--    }
+--
+--    const body = `≡ƒÜ¿ NEW ORDER RECEIVED!\n\nOrder ID: #${order.orderId}\nCustomer: ${order.user?.name || 'Guest'}\nAmount: Γé╣${order.total.toFixed(2)}\nItems: ${order.items.length}\n\nPlease check the Order Panel for details.`;
+--
+--    if (!isTwilioConfigured) {
+--        console.log(`\n==================================================`);
+--        console.log(`[Twilio Dev Fallback] Admin SMS Alert to ${numbers.join(', ')}:`);
+--        console.log(body);
+--        console.log(`==================================================\n`);
+--        return;
+--    }
+--
+--    for (const phone of numbers) {
+--        try {
+--            await client.messages.create({
+--                body,
+--                from: twilioPhoneNumber,
+--                
+--                to: phone
+--            });
+--            console.log(`Admin SMS notification sent to ${phone}`);
+--        } catch (error) {
+--            console.error(`Failed to send Admin SMS to ${phone}:`, error.message);
+--        }
+--    }
+--};
+--
+--/**
+-- * Sends a promotional SMS to a customer number
+-- * @param {string} phone 
+-- * @param {string} body 
+-- */
+--const sendPromotionalSMS = async (phone, body) => {
+--    if (!phone) throw new Error('Phone number is required');
+--    let formattedPhone = phone.trim();
+--    if (/^[6-9]\d{9}$/.test(formattedPhone)) {
+--        formattedPhone = `+91${formattedPhone}`;
+--    }
+--
+--    if (!isTwilioConfigured) {
+--        console.log(`\n==================================================`);
+--        console.log(`[Twilio Dev Fallback] Promotional SMS to ${formattedPhone}:`);
+--        console.log(body);
+--        console.log(`==================================================\n`);
+--        return { success: true, messageId: "dev-fallback-sms-sid" };
+--    }
+--
+--    try {
+--        const response = await client.messages.create({
+--            body,  
+--            from: twilioPhoneNumber,
+--            to: formattedPhone
+--        });
+--        return { success: true, messageId: response.sid };
+--    } catch (error) {
+--        console.error('Twilio Promotional SMS Error:', error.message);
+--        throw error;
+--    }
+--};
+--
+--/**
+-- * Sends a promotional WhatsApp message to a customer number
+-- * @param {string} phone 
+-- * @param {string} body 
+-- */
+--const sendPromotionalWhatsApp = async (phone, body) => {
+--    if (!phone) throw new Error('Phone number is required');
+--    let formattedPhone = phone.trim();
+--    if (/^[6-9]\d{9}$/.test(formattedPhone)) {
+--        formattedPhone = `+91${formattedPhone}`;
+--    }
+--
+--    // Twilio WhatsApp numbers require the "whatsapp:" prefix
+--    const toWhatsApp = `whatsapp:${formattedPhone}`;
+--    const fromWhatsApp = `whatsapp:${twilioPhoneNumber}`;
+--
+--    if (!isTwilioConfigured) {
+--        console.log(`\n==================================================`);
+--        console.log(`[Twilio Dev Fallback] Promotional WhatsApp to ${formattedPhone}:`);
+--        console.log(body);
+--        console.log(`==================================================\n`);
+--        return { success: true, messageId: "dev-fallback-whatsapp-sid" };
+--    }
+--
+--    try {
+--        const response = await client.messages.create({
+--            body,
+--            from: fromWhatsApp,
+--            to: toWhatsApp
+--        });
+--        return { success: true, messageId: response.sid };
+--    } catch (error) {
+--        console.error('Twilio Promotional WhatsApp Error:', error.message);
+--        throw error;
+--    }
+--};
+--
+--module.exports = {
+ -    normalizePhone,
+--    sendOtp,
+--    verifyOtp,
+ -    peekOtp,
+ -    isPhoneLocked,
+--    sendSMSOrderAlert,
+--    sendWhatsAppOrderAlert,
+--    sendAdminNewOrderAlert,
+--    sendPromotionalSMS,
+--    sendPromotionalWhatsApp
+--};
