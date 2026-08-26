@@ -7,3 +7,6 @@ razorpay_test_api_keys_*.csv
 New Text Document.txt
 .vercel
 .env*
+
+.vercel
+.env*

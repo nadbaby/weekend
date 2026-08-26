@@ -3972,7 +3972,45 @@ app.get("/api/admin/reports/excel", auth, adminOnly, async (req, res) => {
 
 app.get("/api/admin/analytics", auth, adminOnly, async (req, res) => {
   try {
-    const orders = await Order.find({ "paymentDetails.status": "SUCCESS" });
+    const daysRaw = req.query.days;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+
+    let matchQuery = { "paymentDetails.status": "SUCCESS" };
+    let allQuery = {};
+    let effectiveDays = 30;
+    let isCustom = false;
+    let customEnd = new Date();
+
+    if (daysRaw === 'custom' && startDate && endDate) {
+      isCustom = true;
+      const customStart = new Date(startDate);
+      customStart.setHours(0, 0, 0, 0);
+      customEnd = new Date(endDate);
+      customEnd.setHours(23, 59, 59, 999);
+
+      matchQuery.createdAt = { $gte: customStart.toISOString(), $lte: customEnd.toISOString() };
+      allQuery.createdAt = { $gte: customStart.toISOString(), $lte: customEnd.toISOString() };
+
+      const diffTime = Math.abs(customEnd - customStart);
+      effectiveDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    } else {
+      const parsedParsed = parseInt(daysRaw);
+      const days = isNaN(parsedParsed) ? 7 : parsedParsed;
+      if (days !== -1) {
+        const filterDate = new Date();
+        filterDate.setDate(filterDate.getDate() - days);
+        filterDate.setHours(0, 0, 0, 0);
+
+        matchQuery.createdAt = { $gte: filterDate.toISOString() };
+        allQuery.createdAt = { $gte: filterDate.toISOString() };
+        effectiveDays = days;
+      } else {
+        effectiveDays = -1; // all time
+      }
+    }
+
+    const orders = await Order.find(matchQuery).sort({ createdAt: -1 });
 
     // 1. Basic KPIs
     const totalRevenue = orders.reduce((sum, o) => sum + (o.total || 0), 0);
@@ -3986,40 +4024,77 @@ app.get("/api/admin/analytics", auth, adminOnly, async (req, res) => {
       zoneStats[zone] = (zoneStats[zone] || 0) + (o.total || 0);
     });
 
-    // 3. Sales Trend (Last 7 Days)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    // Initialize last 7 days with zero
+    // 3. Sales Trend
+    // If effectiveDays is large (like 365 or -1 which means all time), group by month to keep chart readable
     const dailyStatsMap = {};
-    for (let i = 0; i < 7; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      dailyStatsMap[d.toISOString().split('T')[0]] = 0;
+
+    if (effectiveDays > 90 || effectiveDays === -1) {
+      // Group by month
+      orders.forEach(o => {
+        const d = new Date(o.createdAt);
+        const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        dailyStatsMap[monthKey] = (dailyStatsMap[monthKey] || 0) + (o.total || 0);
+      });
+    } else {
+      // Initialize zero for all days in range to ensure empty days appear on chart
+      for (let i = 0; i <= effectiveDays; i++) {
+        const d = new Date(isCustom ? customEnd : new Date());
+        d.setDate(d.getDate() - i);
+        dailyStatsMap[d.toISOString().split('T')[0]] = 0;
+      }
+
+      orders.forEach(o => {
+        const dateKey = new Date(o.createdAt).toISOString().split('T')[0];
+        if (dailyStatsMap.hasOwnProperty(dateKey)) {
+          dailyStatsMap[dateKey] += o.total;
+        }
+      });
     }
 
-    orders.forEach(o => {
-      const dateKey = new Date(o.createdAt).toISOString().split('T')[0];
-      if (dailyStatsMap.hasOwnProperty(dateKey)) {
-        dailyStatsMap[dateKey] += o.total;
-      }
-    });
-
-    const dailyStats = Object.keys(dailyStatsMap)
+    const trendData = Object.keys(dailyStatsMap)
       .sort()
-      .map(date => ({
-        date: new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-        revenue: dailyStatsMap[date]
-      }));
+      .map(dateStr => {
+        let label = dateStr;
+        if (dateStr.length === 7) {
+          // Month format (YYYY-MM)
+          const [y, m] = dateStr.split('-');
+          const d = new Date(y, parseInt(m) - 1);
+          label = d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+        } else {
+          label = new Date(dateStr).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+        }
+        return {
+          date: label,
+          revenue: dailyStatsMap[dateStr]
+        };
+      });
 
     // 4. Status Distribution
-    const allOrders = await Order.find({});
+    const allOrders = await Order.find(allQuery);
     const statusStats = {};
     allOrders.forEach(o => {
       statusStats[o.status] = (statusStats[o.status] || 0) + 1;
     });
 
+    // 5. Recent Payments List
+    let filteredOrders = orders;
+    if (req.query.searchTxn) {
+      const sq = req.query.searchTxn.toLowerCase();
+      filteredOrders = orders.filter(o =>
+        (o.orderId && o.orderId.toLowerCase().includes(sq)) ||
+        (o.shippingAddress?.fullName && o.shippingAddress.fullName.toLowerCase().includes(sq))
+      );
+    }
+
+    const recentPayments = filteredOrders.slice(0, 20).map(o => ({
+      id: o.orderId,
+      amount: o.total,
+      date: o.createdAt,
+      customer: o.shippingAddress?.fullName || 'Guest'
+    }));
+
     res.json({
+      recentPayments,
       summary: {
         totalRevenue,
         totalOrders,
@@ -4027,7 +4102,7 @@ app.get("/api/admin/analytics", auth, adminOnly, async (req, res) => {
         averageOrderValue: totalOrders > 0 ? totalRevenue / totalOrders : 0
       },
       zoneData: Object.keys(zoneStats).map(name => ({ name, value: zoneStats[name] })),
-      trendData: dailyStats,
+      trendData,
       statusData: Object.keys(statusStats).map(name => ({ name, value: statusStats[name] }))
     });
   } catch (error) {
