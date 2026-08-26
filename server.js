@@ -4078,9 +4078,20 @@ app.get("/api/admin/analytics", auth, adminOnly, async (req, res) => {
 
     // 5. Recent Payments List
     let filteredOrders = orders;
+
+    if (req.query.txnStart || req.query.txnEnd) {
+      filteredOrders = filteredOrders.filter(o => {
+        const d = new Date(o.createdAt);
+        let valid = true;
+        if (req.query.txnStart && d < new Date(req.query.txnStart)) valid = false;
+        if (req.query.txnEnd && d > new Date(req.query.txnEnd)) valid = false;
+        return valid;
+      });
+    }
+
     if (req.query.searchTxn) {
       const sq = req.query.searchTxn.toLowerCase();
-      filteredOrders = orders.filter(o =>
+      filteredOrders = filteredOrders.filter(o =>
         (o.orderId && o.orderId.toLowerCase().includes(sq)) ||
         (o.shippingAddress?.fullName && o.shippingAddress.fullName.toLowerCase().includes(sq))
       );
