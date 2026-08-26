@@ -2103,7 +2103,14 @@ app.post("/api/payment/verify", auth, async (req, res) => {
               .catch(err => console.error("Auto WhatsApp Alert Error:", err));
           }
           sendAdminNewOrderAlert(order)
-            .catch(err => console.error("Admin SMS Alert Error:", err));
+            .then(async (res) => {
+              const status = res && res.success ? "SENT" : "FAILED";
+              await Order.updateOne({ orderId: order.orderId }, { $set: { adminSmsStatus: status } });
+            })
+            .catch(async err => {
+              console.error("Admin SMS Alert Error:", err);
+              await Order.updateOne({ orderId: order.orderId }, { $set: { adminSmsStatus: "FAILED" } });
+            });
         }
       }
 
@@ -2191,7 +2198,14 @@ app.post("/api/payment/webhook", async (req, res) => {
             .catch(err => console.error("Auto WhatsApp Alert Error:", err));
         }
         sendAdminNewOrderAlert(order)
-          .catch(err => console.error("Admin SMS Alert Error:", err));
+          .then(async (res) => {
+            const status = res && res.success ? "SENT" : "FAILED";
+            await Order.updateOne({ orderId: order.orderId }, { $set: { adminSmsStatus: status } });
+          })
+          .catch(async err => {
+            console.error("Admin SMS Alert Error:", err);
+            await Order.updateOne({ orderId: order.orderId }, { $set: { adminSmsStatus: "FAILED" } });
+          });
       }
     } catch (err) {
       console.error("Webhook Order Update Error:", err);

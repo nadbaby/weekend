@@ -70,7 +70,8 @@ const OrderSchema = new mongoose.Schema({
   purchaseCount: { type: Number },
   createdAt: { type: String, default: () => new Date().toISOString() },
   paidAt: { type: String },
-  hiddenFromUser: { type: Boolean, default: false }
+  hiddenFromUser: { type: Boolean, default: false },
+  adminSmsStatus: { type: String, enum: ["PENDING", "SENT", "FAILED"], default: "PENDING" }
 });
 
 module.exports = mongoose.model("Order", OrderSchema);

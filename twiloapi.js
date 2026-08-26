@@ -47,10 +47,10 @@ if (isTwilioConfigured) {
 }
 
 // Security constants
-const MAX_OTP_ATTEMPTS  = 5;          // max wrong guesses before lockout
-const LOCKOUT_DURATION  = 15 * 60 * 1000; // 15 minutes in ms
-const OTP_TTL           = 5  * 60 * 1000; // 5 minutes in ms
-const RESEND_COOLDOWN   = 30 * 1000;      // 30 seconds between resends
+const MAX_OTP_ATTEMPTS = 5;          // max wrong guesses before lockout
+const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes in ms
+const OTP_TTL = 5 * 60 * 1000; // 5 minutes in ms
+const RESEND_COOLDOWN = 30 * 1000;      // 30 seconds between resends
 
 // In-memory OTP storage
 // phone → { otp, expires, lastSent, nonce, attempts, lockedUntil }
@@ -76,8 +76,8 @@ setInterval(() => {
     let cleaned = 0;
     for (const [phone, data] of otpStore.entries()) {
         // Keep locked entries until lockout expires, remove expired+unlocked entries
-        const lockExpired  = !data.lockedUntil || now > data.lockedUntil;
-        const otpExpired   = now > data.expires;
+        const lockExpired = !data.lockedUntil || now > data.lockedUntil;
+        const otpExpired = now > data.expires;
         if (otpExpired && lockExpired) {
             otpStore.delete(phone);
             cleaned++;
@@ -135,7 +135,7 @@ const sendOtp = async (phone) => {
     const formattedPhone = normalizePhone(phone);
     if (!formattedPhone) throw new Error('Invalid phone number format');
 
-    const now  = Date.now();
+    const now = Date.now();
     const existing = otpStore.get(formattedPhone);
 
     // Reject if phone is currently locked out
@@ -150,21 +150,21 @@ const sendOtp = async (phone) => {
         throw new Error(`Please wait ${remainingSec} seconds before requesting a new OTP.`);
     }
 
-    const otp   = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const nonce = require('crypto').randomBytes(16).toString('hex'); // unique per OTP for anti-replay
     const expiry = now + OTP_TTL;
 
     // Store entry — reset attempts on new OTP request
     otpStore.set(formattedPhone, {
-        otp:          String(otp).trim(),
+        otp: String(otp).trim(),
         nonce,
-        expires:      expiry,
-        lastSent:     now,
-        attempts:     0,
-        lockedUntil:  null
+        expires: expiry,
+        lastSent: now,
+        attempts: 0,
+        lockedUntil: null
     });
 
-    console.log(`🔑 [OTP] Generated for ${formattedPhone} (expires ${new Date(expiry).toISOString()}, nonce: ${nonce.slice(0,8)}...)`);
+    console.log(`🔑 [OTP] Generated for ${formattedPhone} (expires ${new Date(expiry).toISOString()}, nonce: ${nonce.slice(0, 8)}...)`);
 
     if (!isTwilioConfigured) {
         console.log(`\n==================================================`);
@@ -177,7 +177,7 @@ const sendOtp = async (phone) => {
         const message = await client.messages.create({
             body: `Your Fine Bearing OTP is: ${otp}\nValid for 5 minutes. Do not share this code.`,
             from: twilioPhoneNumber,
-            to:   formattedPhone
+            to: formattedPhone
         });
         console.log(`✅ [OTP] SMS sent to ${formattedPhone} | SID: ${message.sid}`);
         return { success: true, messageId: message.sid };
@@ -391,42 +391,57 @@ const sendWhatsAppOrderAlert = async (phone, orderId, status) => {
 };
 
 /**
- * Notifies admin/staff about a new order
+/**
+ * Notifies admin/staff about a new successful payment
  * @param {object} order  Full order object
  */
 const sendAdminNewOrderAlert = async (order) => {
-    // Get list of admin/staff numbers from .env (comma separated)
     const numbersStr = process.env.ADMIN_NOTIFICATION_PHONES || process.env.ADMIN_PHONE || "";
     const numbers = numbersStr.split(',').map(n => n.trim()).filter(n => n.length > 5);
 
     if (numbers.length === 0) {
         console.log("No ADMIN_NOTIFICATION_PHONES found in .env, skipping admin SMS.");
-        return;
+        return { success: false, reason: "No admin numbers configured" };
     }
 
-    const body = `🚨 NEW ORDER RECEIVED!\n\nOrder ID: #${order.orderId}\nCustomer: ${order.user?.name || 'Guest'}\nAmount: ₹${order.total.toFixed(2)}\nItems: ${order.items.length}\n\nPlease check the Order Panel for details.`;
+    const formatCurrency = (amount) => `₹${Number(amount).toLocaleString('en-IN')}`;
+
+    const body = `Hi Boss,
+we got
+New Payment of Order Received!
+
+Order ID: #${order.orderId}
+Customer: ${order.shippingAddress?.fullName || 'Guest'}
+Amount: ${formatCurrency(order.total)}
+Payment Status: SUCCESS
+Transaction ID: ${order.paymentDetails?.transactionId || order.razorpayPaymentId || 'N/A'}
+
+Please check the admin dashboard for complete order details.`;
 
     if (!isTwilioConfigured) {
         console.log(`\n==================================================`);
         console.log(`[Twilio Dev Fallback] Admin SMS Alert to ${numbers.join(', ')}:`);
         console.log(body);
         console.log(`==================================================\n`);
-        return;
+        return { success: true }; // Treat as dev success
     }
 
+    let allFailed = true;
     for (const phone of numbers) {
         try {
             await client.messages.create({
                 body,
                 from: twilioPhoneNumber,
-                
                 to: phone
             });
             console.log(`Admin SMS notification sent to ${phone}`);
+            allFailed = false;
         } catch (error) {
             console.error(`Failed to send Admin SMS to ${phone}:`, error.message);
         }
     }
+
+    return { success: !allFailed };
 };
 
 /**
@@ -451,7 +466,7 @@ const sendPromotionalSMS = async (phone, body) => {
 
     try {
         const response = await client.messages.create({
-            body,  
+            body,
             from: twilioPhoneNumber,
             to: formattedPhone
         });
