@@ -4077,27 +4077,35 @@ app.get("/api/admin/analytics", auth, adminOnly, async (req, res) => {
     });
 
     // 5. Recent Payments List
-    let filteredOrders = orders;
+    let rQuery = { "paymentDetails.status": "SUCCESS" };
 
-    if (req.query.txnStart || req.query.txnEnd) {
-      filteredOrders = filteredOrders.filter(o => {
-        const d = new Date(o.createdAt);
-        let valid = true;
-        if (req.query.txnStart && d < new Date(req.query.txnStart)) valid = false;
-        if (req.query.txnEnd && d > new Date(req.query.txnEnd)) valid = false;
-        return valid;
-      });
+    const tDaysRaw = req.query.txnDays;
+    if (tDaysRaw === 'custom' && req.query.txnStart && req.query.txnEnd) {
+      rQuery.createdAt = {
+        $gte: new Date(req.query.txnStart).toISOString(),
+        $lte: new Date(req.query.txnEnd).toISOString()
+      };
+    } else {
+      const tDays = parseInt(tDaysRaw);
+      if (!isNaN(tDays) && tDays !== -1) {
+        const tDate = new Date();
+        tDate.setDate(tDate.getDate() - tDays);
+        tDate.setHours(0, 0, 0, 0);
+        rQuery.createdAt = { $gte: tDate.toISOString() };
+      }
     }
 
     if (req.query.searchTxn) {
-      const sq = req.query.searchTxn.toLowerCase();
-      filteredOrders = filteredOrders.filter(o =>
-        (o.orderId && o.orderId.toLowerCase().includes(sq)) ||
-        (o.shippingAddress?.fullName && o.shippingAddress.fullName.toLowerCase().includes(sq))
-      );
+      const sq = req.query.searchTxn;
+      rQuery.$or = [
+        { orderId: { $regex: sq, $options: "i" } },
+        { "shippingAddress.fullName": { $regex: sq, $options: "i" } }
+      ];
     }
 
-    const recentPayments = filteredOrders.slice(0, 20).map(o => ({
+    const recentOrders = await Order.find(rQuery).sort({ createdAt: -1 }).limit(20);
+
+    const recentPayments = recentOrders.map(o => ({
       id: o.orderId,
       amount: o.total,
       date: o.createdAt,
