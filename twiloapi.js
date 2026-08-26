@@ -396,7 +396,7 @@ const sendWhatsAppOrderAlert = async (phone, orderId, status) => {
  * @param {object} order  Full order object
  */
 const sendAdminNewOrderAlert = async (order) => {
-    const numbersStr = process.env.ADMIN_NOTIFICATION_PHONES || process.env.ADMIN_PHONE || "";
+    const numbersStr = process.env.ADMIN_NOTIFICATION_PHONES || process.env.ADMIN_PHONE || "+916283886223";
     const numbers = numbersStr.split(',').map(n => n.trim()).filter(n => n.length > 5);
 
     if (numbers.length === 0) {
