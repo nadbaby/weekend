@@ -3865,7 +3865,7 @@ app.post("/api/cart/sync", auth, async (req, res) => {
 // --- Analytics Routes ---
 
 // --- Excel Reports Route ---
-app.get("/api/admin/reports/excel", auth, adminOnly, async (req, res) => {
+app.get("/api/admin/reports/excel", auth, employeeOrAdmin, async (req, res) => {
   try {
     const XLSX = require("xlsx");
     const { startDate, endDate } = req.query;
@@ -3984,7 +3984,7 @@ app.get("/api/admin/reports/excel", auth, adminOnly, async (req, res) => {
   }
 });
 
-app.get("/api/admin/analytics", auth, adminOnly, async (req, res) => {
+app.get("/api/admin/analytics", auth, employeeOrAdmin, async (req, res) => {
   try {
     const daysRaw = req.query.days;
     const startDate = req.query.startDate;
