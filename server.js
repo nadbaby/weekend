@@ -1916,6 +1916,57 @@ app.get("/api/coupons/eligible-gst", async (req, res) => {
   }
 });
 
+// --- ADMIN PUSH NOTIFICATIONS ---
+const sendAdminPushNotification = async (order) => {
+  try {
+    const adminDocs = await Employee.find({ fcmToken: { $exists: true, $ne: "" } });
+    if (!adminDocs.length) return;
+
+    const amount = order.total || order.subtotal;
+    const frontendUrl = process.env.FRONTEND_URL || "https://finebearingonline.com";
+
+    const message = {
+      notification: {
+        title: "🔔 New Order Received",
+        body: `Order #${order.orderId} has been confirmed. Total: ₹${amount}`
+      },
+      webpush: {
+        fcmOptions: {
+          link: `${frontendUrl}/employee-panel`
+        }
+      },
+      tokens: adminDocs.map(a => a.fcmToken)
+    };
+
+    if (message.tokens.length > 0) {
+      const response = await admin.messaging().sendEachForMulticast(message);
+      console.log("Push notifications sent:", response.successCount);
+    }
+  } catch (err) {
+    console.error("FCM Send Error:", err);
+  }
+};
+
+app.post("/api/admin/employees/fcm-token", auth, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (token) {
+      let query = [];
+      if (req.user.username) query.push({ username: req.user.username });
+      if (req.user.uid) query.push({ firebaseUid: req.user.uid });
+      if (query.length > 0) {
+        await Employee.findOneAndUpdate(
+          { $or: query },
+          { fcmToken: token }
+        );
+      }
+    }
+    res.json({ success: true });
+  } catch (error) {
+    sendErrorResponse(res, error, "Failed to save FCM token");
+  }
+});
+
 // 1. Create Razorpay or COD Order
 app.post("/api/payment/create-order", auth, async (req, res) => {
   try {
@@ -2046,6 +2097,7 @@ app.post("/api/payment/create-order", auth, async (req, res) => {
       }
       sendAdminNewOrderAlert(newOrder)
         .catch(err => console.error("Admin SMS Alert Error:", err));
+      sendAdminPushNotification(newOrder).catch(err => console.error("Push Error:", err));
     }
   } catch (error) {
     console.error("Create Order Error:", error);
@@ -2111,6 +2163,7 @@ app.post("/api/payment/verify", auth, async (req, res) => {
               console.error("Admin SMS Alert Error:", err);
               await Order.updateOne({ orderId: order.orderId }, { $set: { adminSmsStatus: "FAILED" } });
             });
+          sendAdminPushNotification(order).catch(err => console.error("Push Error:", err));
         }
       }
 
@@ -2206,6 +2259,7 @@ app.post("/api/payment/webhook", async (req, res) => {
             console.error("Admin SMS Alert Error:", err);
             await Order.updateOne({ orderId: order.orderId }, { $set: { adminSmsStatus: "FAILED" } });
           });
+        sendAdminPushNotification(order).catch(err => console.error("Push Error:", err));
       }
     } catch (err) {
       console.error("Webhook Order Update Error:", err);

@@ -11,6 +11,7 @@ const EmployeeSchema = new mongoose.Schema({
   phone: { type: String },
   gstNumber: { type: String },
   firebaseUid: { type: String, unique: true, sparse: true },
+  fcmToken: { type: String },
   createdAt: { type: String, default: () => new Date().toISOString() }
 });
 
